@@ -1,0 +1,19 @@
+{
+  "_comment": "由 build.bat 调用 changelog.mjs 在打包时录入，应用升级后首次启动以弹窗展示。可手动编辑，type 取值 new（新功能）/ improve（优化）/ fix（修复）。",
+  "releases": [
+    {
+      "version": "3.2.5",
+      "date": "2026-09-30",
+      "items": [
+        {
+          "type": "new",
+          "text": "热切换模式"
+        },
+        {
+          "type": "new",
+          "text": "更新日志窗口"
+        }
+      ]
+    }
+  ]
+}
