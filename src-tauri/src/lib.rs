@@ -1895,6 +1895,7 @@ pub fn run() {
             update_codex_profile,
             delete_codex_profile,
             switch_codex_profile,
+            switch_codex_to_account_login,
             import_codex_current,
             get_codex_status,
             get_grok_profiles,

@@ -762,6 +762,7 @@ pub(crate) fn split_codex_config_root_and_sections(config_text: &str) -> (String
         "model_reasoning_effort",
         "disable_response_storage",
         "preferred_auth_method",
+        "forced_login_method",
         "model_catalog_json",
         "chatgpt_base_url",
     ];
@@ -1234,7 +1235,249 @@ pub(crate) fn import_codex_current(app: tauri::AppHandle, name: String) -> Resul
     Ok(profile)
 }
 
+/// 只改动账号登录相关配置，保留模型、MCP、项目设置等原有内容。
+pub(crate) fn codex_account_login_config(existing: &str) -> Result<String, String> {
+    const LEGACY_COMMENT: &str = "# 兼容旧聊天，不改变新聊天默认提供商";
+    let newline = if existing.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut section = Vec::<String>::new();
+    let mut multiline_quote = None;
+    let mut skip_multiline_value = false;
+    let mut preserved = Vec::new();
+    for line in existing.lines() {
+        let in_string = multiline_quote.is_some();
+        update_codex_toml_multiline_quote(line, &mut multiline_quote);
+        if skip_multiline_value {
+            skip_multiline_value = multiline_quote.is_some();
+            continue;
+        }
+        if !in_string {
+            if let Some(path) = parse_toml_header_path(line) {
+                section = path;
+            }
+        }
+        if section.len() >= 2 && section[0] == "model_providers" && section[1] == "custom" {
+            continue;
+        }
+        if !in_string {
+            if line.trim() == LEGACY_COMMENT {
+                continue;
+            }
+            if let Some((raw_key, raw_value)) = line.split_once('=') {
+                if let Some(path) = parse_toml_header_path(&format!("[{}]", raw_key.trim())) {
+                    if section.is_empty() && path.len() == 1
+                        && matches!(path[0].as_str(), "model_provider" | "forced_login_method" | "chatgpt_base_url" | "preferred_auth_method")
+                    {
+                        skip_multiline_value = multiline_quote.is_some();
+                        continue;
+                    }
+                    let mut full_path = section.clone();
+                    full_path.extend(path);
+                    if full_path == ["model_providers"] {
+                        return Err("当前 model_providers 使用内联父表，无法安全转换；请先改为 [model_providers.<名称>] 表格式，原配置未修改".into());
+                    }
+                    if full_path.len() >= 2 && full_path[0] == "model_providers" && full_path[1] == "custom" {
+                        if raw_value.trim_start().starts_with('{') && parse_toml_section_body(line).is_empty() {
+                            return Err("当前 custom 使用跨行内联表，无法安全转换；请先改为 [model_providers.custom] 表格式，原配置未修改".into());
+                        }
+                        skip_multiline_value = multiline_quote.is_some();
+                        continue;
+                    }
+                }
+            }
+        }
+        preserved.push(line);
+    }
+    let body = preserved.join("\n");
+    let mut output = String::from("model_provider = \"openai\"\nforced_login_method = \"chatgpt\"\n");
+    if !body.trim().is_empty() {
+        output.push_str(body.trim_matches('\n'));
+        output.push('\n');
+    }
+    output.push_str(&format!("\n{LEGACY_COMMENT}\n[model_providers.custom]\nname = \"OpenAI (legacy custom)\"\nbase_url = \"https://chatgpt.com/backend-api/codex\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n"));
+    Ok(output.replace('\n', newline))
+}
+
+// 表头与键名可能出现在多行说明文字内，不能把字符串内容当作配置修改。
+fn update_codex_toml_multiline_quote(line: &str, multiline: &mut Option<u8>) {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(quote) = *multiline {
+            if quote == b'"' && bytes[index] == b'\\' {
+                index += 2;
+            } else if bytes[index..].starts_with(&[quote; 3]) {
+                *multiline = None;
+                index += 3;
+            } else {
+                index += 1;
+            }
+        } else if bytes[index] == b'#' {
+            break;
+        } else if matches!(bytes[index], b'"' | b'\'') {
+            let quote = bytes[index];
+            if bytes[index..].starts_with(&[quote; 3]) {
+                *multiline = Some(quote);
+                index += 3;
+            } else {
+                index += 1;
+                while index < bytes.len() {
+                    if quote == b'"' && bytes[index] == b'\\' {
+                        index += 2;
+                    } else if bytes[index] == quote {
+                        index += 1;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+        } else {
+            index += 1;
+        }
+    }
+}
+
 #[tauri::command]
-pub(crate) fn get_codex_status() -> Option<LocationStatus> {
-    read_codex_status()
+pub(crate) fn switch_codex_to_account_login(app: tauri::AppHandle) -> Result<(), String> {
+    let path = codex_config_path();
+    let existing = match fs::read_to_string(&path) {
+        Ok(config) => Some(config),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("读取 codex config.toml 失败: {error}")),
+    };
+    let updated = codex_account_login_config(existing.as_deref().unwrap_or_default())?;
+    let backup = backup_codex_runtime_files(&app);
+    if existing.is_some() && backup.config_backup.is_none() {
+        return Err("备份 codex config.toml 失败，未切换登录方式".into());
+    }
+    let mut profiles = read_codex_profiles(&app);
+    for profile in &mut profiles.profiles {
+        profile.is_active = false;
+    }
+    fs::create_dir_all(codex_config_dir()).map_err(|e| format!("创建 ~/.codex 目录失败: {e}"))?;
+    write_file_atomic(&path, &updated).map_err(|e| format!("写入 codex config.toml 失败: {e}"))?;
+    if let Err(error) = write_codex_profiles(&app, &profiles) {
+        let rollback = match existing {
+            Some(config) => write_file_atomic(&path, &config),
+            None => fs::remove_file(&path).map_err(|error| error.to_string()),
+        };
+        return match rollback {
+            Ok(()) => Err(format!("保存 Codex 档案状态失败，已还原配置: {error}")),
+            Err(rollback_error) => Err(format!("保存 Codex 档案状态失败: {error}；还原配置失败: {rollback_error}")),
+        };
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexRuntimeStatus {
+    #[serde(flatten)]
+    runtime: LocationStatus,
+    account_login: bool,
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_status() -> Option<CodexRuntimeStatus> {
+    let config = fs::read_to_string(codex_config_path()).unwrap_or_default();
+    read_codex_status().map(|runtime| CodexRuntimeStatus {
+        runtime,
+        account_login: toml_line_value(&config, "model_provider") == "openai"
+            && toml_line_value(&config, "forced_login_method") == "chatgpt",
+    })
+}
+
+#[cfg(test)]
+mod account_login_tests {
+    use super::*;
+
+    #[test]
+    fn codex_account_login_replaces_api_settings_and_preserves_other_config() {
+        let existing = r#"model_provider = "custom"
+forced_login_method = "api"
+preferred_auth_method = "apikey"
+chatgpt_base_url = "http://127.0.0.1:3847/backend-api"
+model = "gpt-5.5"
+approval_policy = "on-request"
+
+[model_providers."custom"] # old API provider
+base_url = "https://api.example.test/v1"
+env_key = "OLD_KEY"
+experimental_bearer_token = "old-token"
+[model_providers.custom.http_headers]
+Authorization = "old-token"
+
+[model_providers.other]
+base_url = "https://other.example.test/v1"
+[mcp_servers.demo]
+command = "node"
+[projects.'H:/demo']
+trust_level = "trusted"
+"#;
+        let output = codex_account_login_config(existing).unwrap();
+        assert!(output.starts_with("model_provider = \"openai\"\nforced_login_method = \"chatgpt\"\n"));
+        assert!(!output.contains("chatgpt_base_url"));
+        assert!(!output.contains("preferred_auth_method"));
+        assert!(!output.contains("old-token"));
+        assert!(!output.contains("OLD_KEY"));
+        assert!(output.contains("model = \"gpt-5.5\""));
+        assert!(output.contains("approval_policy = \"on-request\""));
+        assert!(output.contains("[mcp_servers.demo]\ncommand = \"node\""));
+        assert!(output.contains("[projects.'H:/demo']\ntrust_level = \"trusted\""));
+        assert!(output.contains("[model_providers.other]\nbase_url = \"https://other.example.test/v1\""));
+        assert!(output.contains("# 兼容旧聊天，不改变新聊天默认提供商\n[model_providers.custom]\nname = \"OpenAI (legacy custom)\"\nbase_url = \"https://chatgpt.com/backend-api/codex\"\nwire_api = \"responses\"\nrequires_openai_auth = true"));
+        assert_eq!(codex_account_login_config(&output).unwrap(), output);
+    }
+
+    #[test]
+    fn codex_account_login_preserves_multiline_strings_and_windows_line_endings() {
+        let existing = "model_provider = 'custom'\r\nmodel_instructions = '''\r\n[model_providers.custom]\r\nmodel_provider = 'example'\r\n'''\r\n[mcp_servers.demo]\r\ncommand = 'node'\r\n";
+        let output = codex_account_login_config(existing).unwrap();
+        assert!(output.contains("model_instructions = '''\r\n[model_providers.custom]\r\nmodel_provider = 'example'\r\n'''"));
+        assert!(!output.replace("\r\n", "").contains('\n'));
+        assert_eq!(codex_account_login_config(&output).unwrap(), output);
+    }
+
+    #[test]
+    fn codex_account_login_handles_empty_config_and_switching_back_to_api() {
+        let account = codex_account_login_config("").unwrap();
+        assert_eq!(toml_line_value(&account, "model_provider"), "openai");
+        assert_eq!(toml_line_value(&account, "forced_login_method"), "chatgpt");
+        let api = codex_config_toml_content("custom", "gpt-5.5", "https://api.example.test/v1", "test-key", false);
+        let restored = merge_codex_config_with_preserved_sections(&api, &account);
+        assert!(!restored.contains("forced_login_method"));
+        assert_eq!(toml_line_value(&restored, "model_provider"), "custom");
+    }
+
+    #[test]
+    fn codex_account_login_replaces_quoted_root_and_dotted_provider_keys() {
+        let existing = r#"'model_provider' = 'custom'
+'forced_login_method' = 'api'
+"chatgpt_base_url" = "http://127.0.0.1:3847/backend-api"
+"model_providers"."custom" = { base_url = "https://api.example.test/v1" }
+"#;
+        let output = codex_account_login_config(existing).unwrap();
+        assert!(!output.contains("'model_provider'"));
+        assert!(!output.contains("'forced_login_method'"));
+        assert!(!output.contains("chatgpt_base_url"));
+        assert!(!output.contains("https://api.example.test/v1"));
+    }
+
+    #[test]
+    fn codex_account_login_rejects_inline_parent_tables_before_writing() {
+        let existing = "model_providers = { custom = { base_url = 'https://api.example.test/v1' }, other = { name = 'Keep' } }";
+        let error = codex_account_login_config(existing).unwrap_err();
+        assert!(error.contains("内联父表"));
+        assert!(error.contains("原配置未修改"));
+        let multiline_inline = "model_providers.custom = {\nbase_url = 'https://api.example.test/v1'\n}\n";
+        assert!(codex_account_login_config(multiline_inline).is_err());
+    }
+
+    #[test]
+    fn codex_account_login_removes_complete_multiline_auth_values() {
+        let existing = "model_provider = '''\ncustom'''\nforced_login_method = '''api'''\nmodel = 'gpt-5.5'\n";
+        let output = codex_account_login_config(existing).unwrap();
+        assert!(!output.contains("'''"));
+        assert!(output.contains("model = 'gpt-5.5'"));
+    }
 }

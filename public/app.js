@@ -3154,6 +3154,7 @@ function applyLanguage() {
   // Codex page labels
   updateCodexStatusTitle();
   setText("codexProfilesSectionTitle", t("codexProfilesTitle"));
+  setText("codexAccountLoginBtn", currentLang === "zh" ? "账号登录" : "Account login");
   setText("codexSyncBtn", t("syncNow"));
   setText("codexPageImportBtn", t("importBtn"));
   setText("codexPresetLabel", t("providerPresetLabel"));
@@ -7129,6 +7130,11 @@ async function loadCodexStatus() {
     const status = await invoke("get_codex_status");
     lastCodexStatus = status;
     const grid = $("codexStatusGrid");
+    if (status?.accountLogin) {
+      if (grid) grid.innerHTML = `<div class="status-card"><div class="status-card-title">Codex · ${currentLang === "zh" ? "账号登录" : "Account login"}</div><p>${currentLang === "zh" ? "已配置 ChatGPT 账号登录，请重新打开 Codex 完成登录。" : "ChatGPT account login configured. Reopen Codex to sign in."}</p></div>`;
+      renderNavigationStatus();
+      return;
+    }
     if (!status || !status.apiKey) {
       if (grid) {
         grid.innerHTML = `<div class="status-card" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:13px;">Codex: --</div>`;
@@ -7317,6 +7323,24 @@ async function handleCodexSubmit(event) {
 }
 
 // A10: 切换/删除逻辑统一走 PROVIDER_CONFIG 驱动的公共实现
+async function handleCodexAccountLogin() {
+  const button = $("codexAccountLoginBtn");
+  if (button?.disabled) return;
+  setButtonBusy(button, true);
+  try {
+    await invoke("switch_codex_to_account_login");
+    await loadCodexProfiles();
+    await loadCodexStatus();
+    showToast(currentLang === "zh"
+      ? "已切换为账号登录，请重新打开 Codex 并使用 ChatGPT 账号登录。"
+      : "Account login configured. Reopen Codex and sign in with ChatGPT.", "success");
+  } catch (error) {
+    showToast(String(error), "error");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
 async function handleCodexSwitch(id) {
   return switchProviderProfile("codex", id);
 }
@@ -10404,7 +10428,7 @@ function renderNavigationStatus() {
   const grokLoaded = lastGrokStatus != null || grokProfiles.length > 0;
   const geminiLoaded = lastGeminiStatus != null || geminiProfiles.length > 0;
   const claudeOk = !!(lastClaudeStatus?.envVars || lastClaudeStatus?.claude || activeClaude);
-  const codexOk = !!(lastCodexStatus?.apiKey || activeCodex);
+  const codexOk = !!(lastCodexStatus?.accountLogin || lastCodexStatus?.apiKey || activeCodex);
   const grokOk = !!(lastGrokStatus?.apiKey || activeGrok);
   const geminiOk = !!(lastGeminiStatus?.apiKey || activeGemini);
   const opencodeLoaded = lastOpenCodeStatus != null || opencodeProfiles.length > 0;
@@ -10551,6 +10575,7 @@ function bindConsoleUiOnce() {
   bindOverlayDismiss("claudeDesktopProfileOverlay", closeClaudeDesktopProfileDialog);
   $("codexPageAddBtn")?.addEventListener("click", () => openCodexModal(null));
   $("codexPageImportBtn")?.addEventListener("click", handleCodexImport);
+  $("codexAccountLoginBtn")?.addEventListener("click", handleCodexAccountLogin);
   $("codexSyncBtn")?.addEventListener("click", () => {
     const active = codexProfiles.find((profile) => profile.isActive);
     if (active) handleCodexSwitch(active.id);
