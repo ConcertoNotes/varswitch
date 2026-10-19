@@ -14,6 +14,7 @@ TEMP = { value = ".build-tmp", force = true, relative = true }
 incremental = false
 
 [build]
-# 并行任务数；留2个核心给系统，防止机器完全卡死
-# 根据你的 CPU 核心数调整，注释掉则使用全部核心
-# jobs = 6
+# 限制同时编译的任务数，避免按逻辑 CPU 数启动 rustc 导致 Windows 提交内存耗尽
+# （os error 1455 / memory allocation failed）。Release 构建也使用此限制。
+# 内存充足时可通过 cargo -j N 或 CARGO_BUILD_JOBS 覆盖。
+jobs = 2
