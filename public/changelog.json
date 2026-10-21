@@ -2,6 +2,16 @@
   "_comment": "由 build.bat 调用 changelog.mjs 在打包时录入，应用升级后首次启动以弹窗展示。可手动编辑，type 取值 new（新功能）/ improve（优化）/ fix（修复）。",
   "releases": [
     {
+      "version": "3.2.7",
+      "date": "2026-10-21",
+      "items": [
+        {
+          "type": "fix",
+          "text": ":修复账号和api切换配置错误问题"
+        }
+      ]
+    },
+    {
       "version": "3.2.6",
       "date": "2026-10-19",
       "items": [
