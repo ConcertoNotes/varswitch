@@ -417,7 +417,7 @@ const I18N = {
     importBtn: "Import Current",
     addBtn: "+ Add Config",
     statusTitle: "Claude Status",
-    statusHint: "Restart the terminal after switching to apply environment variables.",
+    statusHint: "After switching, open a new terminal and fully quit and reopen your editor to apply environment variables.",
     profilesTitle: "Config List",
     activeProfileLabel: "Current active",
     addConfig: "Add Config",
@@ -660,6 +660,7 @@ const I18N = {
     cancelledRestored: "Switch cancelled. Previous config restored",
     cancelRestoreFailed: "Restore after cancellation failed: {error}",
     switchFailed: "Switch failed: {error}",
+    switchRolledBack: "Switch failed. Previous configuration restored: {error}",
     snapshotFailed: "Snapshot failed: {error}",
     confirmDelete: "Delete \"{name}\"?",
     importPrompt: "Name for the imported config:",
@@ -1165,7 +1166,7 @@ const I18N = {
     importBtn: "导入当前配置",
     addBtn: "+ 添加配置",
     statusTitle: "Claude 状态",
-    statusHint: "切换后请重启终端，使环境变量生效。",
+    statusHint: "切换后请重新打开终端，并完全退出后重开编辑器，使环境变量生效。",
     profilesTitle: "配置列表",
     activeProfileLabel: "当前生效",
     addConfig: "添加配置",
@@ -1408,6 +1409,7 @@ const I18N = {
     cancelledRestored: "已取消切换，已恢复之前配置",
     cancelRestoreFailed: "取消后恢复失败: {error}",
     switchFailed: "切换失败: {error}",
+    switchRolledBack: "切换失败，已恢复之前配置：{error}",
     snapshotFailed: "快照失败: {error}",
     confirmDelete: "确认删除 \"{name}\"？",
     importPrompt: "请输入导入配置名称：",
@@ -1959,7 +1961,6 @@ let profileSaving = false;
 let grokProfileSaving = false;
 let geminiProfileSaving = false;
 let opencodeProfileSaving = false;
-let switchingSnapshot = null;
 let progressUnlisten = null;
 let mobileChannelStatusUnlisten = null;
 let isSwitchingProfile = false;
@@ -5950,7 +5951,6 @@ async function handleSwitch(id) {
     progressUnlisten = await listen("switch-progress", (event) => {
       updateSwitchProgress(event.payload);
     });
-    switchingSnapshot = await invoke("snapshot_config");
     const result = await invoke("switch_profile", { id });
 
     if (result.success) {
@@ -5962,12 +5962,9 @@ async function handleSwitch(id) {
     }
 
     if (result.cancelled) {
-      try {
-        await invoke("restore_config", { snapshot: switchingSnapshot });
-        showToast(t("cancelledRestored"), "warning");
-      } catch (restoreError) {
-        showToast(t("cancelRestoreFailed", { error: String(restoreError) }), "error");
-      }
+      showToast(result.rolledBack ? t("cancelledRestored") : t("cancelRestoreFailed", { error: (result.errors || []).join("; ") }), "warning");
+    } else if (result.rolledBack) {
+      showToast(t("switchRolledBack", { error: (result.errors || []).join("; ") }), "error");
     } else if (result.success) {
       showToast(t("switchedTo", { name: result.profileName }), "success");
     } else {
@@ -5990,16 +5987,13 @@ async function handleSwitch(id) {
       );
     }
   } catch (error) {
-    const message = switchingSnapshot
-      ? t("switchFailed", { error: String(error) })
-      : t("snapshotFailed", { error: String(error) });
+    const message = t("switchFailed", { error: String(error) });
     showToast(message, "error");
   } finally {
     if (progressUnlisten) {
       progressUnlisten();
       progressUnlisten = null;
     }
-    switchingSnapshot = null;
     hideSwitchOverlay();
     isSwitchingProfile = false;
     await Promise.all([loadProfiles(), loadStatus()]);
@@ -10187,7 +10181,7 @@ async function openSettingsInline() {
  * codex 有 providerName / imageApiKey / imageBaseUrl），硬套模板只会让可读性变差。
  *
  * 注意：claude 的切换流程与其余三家差异很大（要监听 switch-progress、
- * 先 snapshot_config 再切、失败要 restore_config、支持取消与部分成功），
+ * 后端统一快照与回滚、支持进度与取消），
  * 因此 claude 的 switch 保留独立实现，这张表里只复用它的 delete / edit。
  */
 const PROVIDER_CONFIG = {

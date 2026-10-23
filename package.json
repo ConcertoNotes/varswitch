@@ -4,7 +4,14 @@
   "description": "VarSwitch - Unified API config manager for Claude Code",
   "private": true,
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "release": "node scripts/release.mjs",
+    "release:build": "node scripts/release-build.mjs",
+    "release:sync": "node sync-mac-release.mjs",
+    "site:deploy": "npx --yes vercel deploy --prod --yes --cwd varswitch-download-site",
+    "test": "node --test public/*.test.js tests/release-build.test.mjs tests/workflows.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.0"

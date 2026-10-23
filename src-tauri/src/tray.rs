@@ -110,13 +110,11 @@ pub(crate) fn handle_tray_switch(app: &tauri::AppHandle, kind: String, profile_i
             "claude" => {
                 let state_handle = app.clone();
                 let state = state_handle.state::<AppState>();
-                switch_profile(app.clone(), state, profile_id.clone()).map(|result| {
+                switch_profile_blocking(app.clone(), state, profile_id.clone()).and_then(|result| {
                     if !result.success {
-                        log_warn!(
-                            "[tray] Claude 切换部分失败: {}",
-                            result.errors.join("; ")
-                        );
+                        return Err(result.errors.join("; "));
                     }
+                    Ok(())
                 })
             }
             "codex" => switch_codex_profile(app.clone(), profile_id.clone()),

@@ -584,6 +584,18 @@ img {
   line-height: 1.7;
 }
 
+.install-note ol {
+  margin: 14px 0 0;
+  padding-left: 22px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.install-note li + li {
+  margin-top: 5px;
+}
+
 .install-note code {
   display: block;
   margin-top: 12px;

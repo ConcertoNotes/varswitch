@@ -39,6 +39,10 @@
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": true
+    },
     "windows": {
       "nsis": {
         "compression": "zlib"

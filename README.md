@@ -2,7 +2,7 @@
 
 VarSwitch 是一个面向 Claude Code、Claude Desktop、Codex CLI、Grok CLI、Gemini CLI 和 API 用户的桌面配置管理工具。它通过可视化界面集中管理 API Key / Token、Base URL、模型、编辑器设置、多套应用配置、Skills、Prompts 预设、MCP Server、本机历史会话、Codex 插件市场与移动端控制能力，并提供托盘快速切换、本地代理故障转移、`varswitch://` 深链导入与多设备数据同步。
 
-当前应用版本：`3.1.17`。
+当前应用版本：`3.2.7`。
 
 ## 主要功能
 
@@ -438,27 +438,26 @@ https://download.varswitch.strova.top/
 ## 开发
 
 ```bash
-npm install
-npm run tauri dev
+npm ci
+npm run dev
 ```
 
-Windows 用户也可以使用：
+`dev.bat` 仅是 Windows 兼容入口；macOS 终端不能运行 `.bat`，请使用 `npm run dev`。
+Mac mini 不需要打开 Xcode IDE；安装 Xcode Command Line Tools、Node.js 和 Rust 后即可开发。
+
+## 本地构建
 
 ```bash
-dev.bat
+npm run build
 ```
 
-## 构建
+`npm run build` 按当前电脑生成原生安装包：Mac 生成 `.app` 与 `.dmg`，Windows 生成 NSIS
+`.exe` 安装包。macOS 必须在 Mac 上构建，Windows 必须使用 Windows 编译环境；Xcode IDE
+不负责 VarSwitch 的打包，Tauri 会调用 Rust 工具链、macOS 系统工具和 `hdiutil`。
+Mac 本地 ad-hoc 包不包含自动更新签名，只适合本机检查和安装测试。
 
-```bash
-npm run tauri build
-```
-
-Windows 用户也可以使用：
-
-```bash
-build.bat
-```
+`dev.bat` 和 `build.bat` 只为 Windows 保留，分别转发到 `npm run dev` 与 `npm run build`。
+Mac 上请使用 npm 命令，不要运行 `.bat` 文件。
 
 构建产物位于：
 
@@ -466,15 +465,12 @@ build.bat
 src-tauri/target/release/bundle/
 ```
 
-Windows 生成 `.exe`（NSIS）安装包，macOS 生成 `.dmg`。
-
-> macOS 安装包无法在 Windows 上构建。Apple 的系统框架、制作 `.dmg` 用的 `hdiutil`
-> 以及签名工具链都只存在于 macOS，Rust 也无法从 Windows 交叉编译到 macOS。
-> 因此 macOS 版本统一由 GitHub Actions 的 macos runner 产出，见下方发布流程。
+本地构建只生成当前平台的安装包。正式发布时，GitHub Actions 会自动在云端构建 Windows、
+Apple 芯片 Mac 和 Intel Mac，不需要在 Windows 电脑上拉代码。
 
 ## CI/CD
 
-推送 `v*` 标签或手动触发工作流后，会并行构建三个目标：
+推送 `v*` 标签后，会并行构建三个目标：
 
 | 作业 | 安装包 |
 | --- | --- |
@@ -488,66 +484,126 @@ Windows 生成 `.exe`（NSIS）安装包，macOS 生成 `.dmg`。
 
 需要在仓库 Settings > Secrets and variables > Actions 中配置：
 
-- `TAURI_SIGNING_PRIVATE_KEY`：`src-tauri/updater.key` 的完整内容
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：该私钥的密码
+- `TAURI_SIGNING_PRIVATE_KEY`：`src-tauri/updater.key` 的完整内容，必填
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥设置了密码时填写；无密码时留空
 
-缺少这两项时工作流会直接失败。否则构建仍会成功，但产物没有签名，对应平台会被静默
+缺少私钥时工作流会直接失败。否则构建仍会成功，但产物没有签名，对应平台会被静默
 排除在 `latest.json` 之外，表现为「CI 全绿，用户却收不到更新」。
 
 ## 发布流程
 
+平时本地试运行用 `npm run dev`；只想在 Mac 上打一个本地测试包用 `npm run build`。
+正式发布则双击仓库根目录的 `build.command`，或在终端执行 `./build.command`，输入版本号：
+
 ```bash
-# 1. 本地构建 Windows 包并统一版本号
-build.bat --version x.y.z
-
-# 2. 推送标签，触发三平台构建
-git tag vx.y.z && git push origin vx.y.z
-
-# 3. 三个作业全绿后，把 macOS 产物同步进下载站
-node sync-mac-release.mjs --token <GitHub Token>
-
-# 4. 部署下载站
-deploy-download-site.bat
+./build.command
 ```
 
-本仓库是私有仓库，因此第 3 步必须带 Token（私有仓库对未认证请求一律返回 404）。
-Token 只需要 `repo` 读权限，也可以写进环境变量 `GITHUB_TOKEN` 后省略该参数。
+首次使用时确认 Mac mini 的 GitHub SSH 权限可推送 `origin`。脚本会列出当前未提交改动并请你
+确认；确认后将这些改动与版本号一起提交。随后运行前端与 Rust 测试并推送标签；GitHub
+Actions 随后构建 Windows x64、Apple 芯片 Mac 和 Intel Mac。**不需要切换到 Windows 电脑，也
+不需要在那里 git pull。**
+
+等 GitHub Actions 的三平台构建完成后，双击 `deploy.command` 或运行 `./deploy.command`，输入
+同一个版本号；脚本会自动下载 Windows 与两种 Mac 安装包、更新下载页和 updater 清单，再部署
+到 Vercel：
+
+```bash
+./deploy.command
+```
+
+两台服务只需首次登录和关联一次：
+
+```bash
+gh auth login
+npx --yes vercel login
+npx --yes vercel link --cwd varswitch-download-site
+```
+
+`build.command` 和 `deploy.command` 是简单交互入口；也可以继续直接使用 `npm run release`、
+`npm run release:sync` 与 `npm run site:deploy`。
 
 私有仓库的 macOS runner 按 10 倍分钟计费，GitHub Free 的 2000 分钟/月相当于约 200
 分钟 macOS 构建时间。工作流已启用 Rust 编译缓存，首次构建较慢，之后会显著缩短。
 
-Windows 与 macOS 必须发布同一版本号。若 `latest.json` 中两端版本不一致，落后的一端
-会被反复提示更新却始终停留在旧版本，因此 `deploy-download-site.bat` 会主动丢弃版本
-不匹配的 macOS 条目并给出提示。
+`sync-mac-release.mjs` 由 `npm run release:sync` 调用，同步完整的三平台发布产物并生成
+供自有下载域名使用的 `latest.json`。工作流等待三平台完成后统一生成更新清单，避免并行
+构建互相覆盖平台信息。
 
-`sync-mac-release.mjs` 默认把 dmg 与更新包下载到下载站，由自有域名分发，方便无法稳定
-访问 GitHub 的用户；加 `--host github` 则只写入 GitHub Release 的链接，不占用部署体积。
+### macOS 签名与公证
 
-### macOS 未公证说明
+没有 Apple Developer 证书时，发布入口会显式使用临时签名（ad-hoc），检查 App、
+DMG 和自动更新包的签名完整性。该版本仍会被 Gatekeeper 拦截，首次使用需按下方说明
+手动放行。临时签名不能替代 Apple 公证，也不能保证浏览器下载后直接打开。
 
-安装包目前没有做 Apple Developer 签名与公证。从浏览器下载后 Gatekeeper 会加上隔离
-标记，首次打开会提示「VarSwitch 已损坏，无法打开」——文件本身是完好的。用户把 App
-拖进「应用程序」后执行一次下面的命令即可正常使用：
+若要免去这一步，需要 Apple Developer 账号的 `Developer ID Application` 证书。
+Tauri 的 `TAURI_SIGNING_PRIVATE_KEY` 仅用于自动更新包签名，不能代替 Apple 签名或公证。
 
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/VarSwitch.app
-```
+在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置（Apple 凭据全不配置
+时使用临时签名；只配置了一部分则报错，不静默降级）：
 
-通过应用内自动更新安装的版本不经过浏览器，不会带上隔离标记，无需重复执行。
+| Secret | 内容 |
+| --- | --- |
+| `APPLE_CERTIFICATE` | 包含私钥的 Developer ID Application `.p12` 文件，转成 base64 |
+| `APPLE_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设置的密码 |
+| `APPLE_SIGNING_IDENTITY` | 完整证书名称，如 `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID` | 公证使用的 Apple ID |
+| `APPLE_PASSWORD` | 该 Apple ID 的 app-specific password，不是登录密码 |
+| `APPLE_TEAM_ID` | Apple Developer Team ID，与证书一致 |
+| `TAURI_SIGNING_PRIVATE_KEY` | Tauri 自动更新私钥 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 更新私钥密码；没有密码时留空 |
 
-若后续购买了 Apple Developer 账号，在仓库中配置以下 secrets 并在工作流里加入签名与
-公证步骤，即可免去用户的这一步操作：
-
-- `APPLE_CERTIFICATE`：`Developer ID Application` 证书导出的 `.p12`，需先转成 base64
-- `APPLE_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码
-- `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID`：公证用的 Apple ID、app-specific password 与 Team ID
-- `KEYCHAIN_PASSWORD`：CI 临时 keychain 的密码
-
-获取 `APPLE_CERTIFICATE` 的方式示例：
+获取证书 base64 的示例：
 
 ```bash
 openssl base64 -A -in certificate.p12 -out certificate-base64.txt
 ```
+
+提供完整 Apple 凭据后，Tauri CLI 会把证书导入临时钥匙串，启用 Hardened Runtime，
+签名 App 并提交 Apple 公证、装订公证票据。无需单独配置 `KEYCHAIN_PASSWORD`。
+无证书时会移除空的公证环境变量，避免被 Tauri 误认为已配置凭据。
+
+`scripts/release-build.mjs` 在上传前校验构建出的 App、解压后的自动更新 App，以及
+实际挂载 DMG 中的 App：都必须通过严格签名校验。有 Apple 凭据时还必须通过证书
+Team ID、公证票据和 Gatekeeper 检查。任一适用检查失败均中止上传，所有平台通过后
+才公开草稿 Release。发布说明会明确标注是否经过 Apple 公证。
+
+本地仅验证安装包时，可禁用自动更新产物，无需更新私钥：
+
+```bash
+npm run tauri -- build --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+默认使用临时签名；没有 Developer ID 签名及 Apple 公证的本地产物仍需手动放行。
+正式构建入口为
+`npm run release:build -- build --target aarch64-apple-darwin --bundles app,dmg`
+（Intel 使用 `x86_64-apple-darwin`），至少需要 Tauri 更新签名密钥；Apple 凭据可选。
+
+无证书版本（包括历史未公证版本）下载后可能被 Gatekeeper 拦截。“已损坏”也可能由
+签名失效或下载不完整导致，不能一概认定文件完好。确认从本项目下载后，将 App 拖入
+「应用程序」，在终端先校验签名完整性，通过后只清除这个 App 的隔离标记：
+
+```bash
+codesign --verify --deep --strict /Applications/VarSwitch.app && xattr -rd com.apple.quarantine /Applications/VarSwitch.app
+```
+
+该命令不会修复无效签名或真实的文件损坏，也不代替正式发布所需的签名、公证。
+
+### macOS 配置切换
+
+- 按 `SHELL` 选择持久化位置：zsh 使用 `${ZDOTDIR:-$HOME}/.zshrc`；bash 同时写入
+  `.bashrc` 与实际使用的 login 文件（`.bash_profile` / `.bash_login` / `.profile`）；
+  fish 使用 `${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish`。
+- 对变量值作 Shell 转义，避免 `$`、反引号、引号等字符被展开。清理旧变量时写入
+  `unset`，避免旧的继承值再次覆盖配置。用户自己维护的其他配置行和符号链接会保留。
+- macOS 同时通过 `launchctl setenv/unsetenv` 更新用户环境，供之后启动的 GUI 应用继承；
+  写入失败时不会把进程内状态提前改成成功。
+- 切换在后台执行；有注释、尾随逗号的编辑器 JSONC 设置可以读取。文件无法解析时
+  会报错并保留原文件。切回默认模型会清除上一配置留下的模型选择。
+- 切换失败或取消时由后端恢复环境变量、编辑器/Claude 配置和代理上游，托盘切换也使用
+  同一流程。原本不存在的配置文件会删除，恢复失败会明确报告。
+- 已运行的终端、CLI 和编辑器无法被外部进程直接修改环境变量。切换后请新开终端，
+  并完全退出后重新打开编辑器。代理模式仍需保持 VarSwitch 运行。
 
 ## 项目结构
 
@@ -570,10 +626,11 @@ openssl base64 -A -in certificate.p12 -out certificate-base64.txt
 │   └── capabilities/    # Tauri 权限配置
 ├── .github/workflows/   # CI 构建配置（Windows + macOS 双架构）
 ├── varswitch-download-site/  # 下载站，含 releases 与 latest.json
+├── scripts/             # 跨平台开发、本地构建、版本发布与签名校验入口
 ├── dev-server.js        # 前端开发静态服务器
 ├── dev.bat              # Windows 开发脚本
 ├── build.bat            # Windows 构建脚本
-├── sync-mac-release.mjs # 把 CI 构建的 macOS 产物同步进下载站
+├── sync-mac-release.mjs # 把 CI 构建的三平台产物同步进下载站
 └── README.md            # 使用说明
 ```
 

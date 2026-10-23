@@ -155,7 +155,7 @@ fn opencode_installed() -> bool {
 
 /// 去掉 JSONC 的行注释、块注释与尾随逗号，使其能被 serde_json 解析。
 /// 字符串字面量内的内容原样保留（含转义），避免把 URL 里的 `//` 当注释。
-fn sanitize_jsonc(raw: &str) -> String {
+pub(crate) fn sanitize_jsonc(raw: &str) -> String {
     let chars: Vec<char> = raw.chars().collect();
     let mut out = String::with_capacity(raw.len());
     let mut i = 0usize;
@@ -188,6 +188,7 @@ fn sanitize_jsonc(raw: &str) -> String {
             continue;
         }
         if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            out.push(' ');
             i += 2;
             while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
                 i += 1;
@@ -195,7 +196,26 @@ fn sanitize_jsonc(raw: &str) -> String {
             i = (i + 2).min(chars.len());
             continue;
         }
-        if c == ',' {
+        out.push(c);
+        i += 1;
+    }
+    // 先去掉全部注释，再判断尾随逗号；逗号后面可能还有注释。
+    let chars: Vec<char> = out.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    i = 0;
+    in_string = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string && c == '\\' && i + 1 < chars.len() {
+            out.push(c);
+            out.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if c == '"' {
+            in_string = !in_string;
+        }
+        if !in_string && c == ',' {
             let mut j = i + 1;
             while j < chars.len() && chars[j].is_whitespace() {
                 j += 1;

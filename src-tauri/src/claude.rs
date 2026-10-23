@@ -92,6 +92,7 @@ pub(crate) struct SwitchResult {
     pub(crate) errors: Vec<String>,
     pub(crate) profile_name: String,
     pub(crate) cancelled: bool,
+    pub(crate) rolled_back: bool,
 }
 
 #[derive(Serialize)]
@@ -129,7 +130,16 @@ pub(crate) struct ConfigSnapshot {
     pub(crate) env_haiku_model: Option<String>,
     /// 动态编辑器快照: key = 编辑器 id, value = 文件内容
     pub(crate) editor_contents: HashMap<String, String>,
+    #[serde(default)]
+    pub(crate) missing_editor_ids: Vec<String>,
     pub(crate) claude_content: Option<String>,
+    #[serde(default)]
+    pub(crate) onboarding_file: Option<OnboardingSnapshot>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct OnboardingSnapshot {
+    pub(crate) content: Option<String>,
 }
 
 pub(crate) fn profiles_path(app: &tauri::AppHandle) -> PathBuf {
@@ -231,14 +241,7 @@ pub(crate) fn claude_settings_path() -> PathBuf {
 pub(crate) fn mark_claude_onboarding_completed() -> Result<(), String> {
     let path = claude_mcp_path(); // ~/.claude.json
 
-    let mut config = if path.exists() {
-        read_json(&path).map_err(|e| format!("读取 ~/.claude.json 失败: {e}"))?
-    } else {
-        serde_json::json!({})
-    };
-    if !config.is_object() {
-        config = serde_json::json!({});
-    }
+    let mut config = read_config_object(&path, false)?;
 
     if config
         .get("hasCompletedOnboarding")
@@ -771,15 +774,30 @@ pub(crate) fn get_claude_proxy_status() -> ClaudeProxyStatus {
 }
 
 #[tauri::command]
-pub(crate) fn snapshot_config(app: tauri::AppHandle) -> ConfigSnapshot {
+pub(crate) fn snapshot_config(app: tauri::AppHandle) -> Result<ConfigSnapshot, String> {
     let settings = read_app_settings(&app);
     let mut editor_contents = HashMap::new();
+    let mut missing_editor_ids = Vec::new();
     for editor in detect_installed_editors(&settings) {
-        if let Ok(content) = fs::read_to_string(resolved_editor_settings_path(editor, &settings)) {
-            editor_contents.insert(editor.id.to_string(), content);
+        let path = resolved_editor_settings_path(editor, &settings);
+        match fs::read_to_string(&path) {
+            Ok(content) => { editor_contents.insert(editor.id.to_string(), content); }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing_editor_ids.push(editor.id.to_string()),
+            Err(e) => return Err(format!("备份编辑器配置 {} 失败: {e}", path.display())),
         }
     }
-    ConfigSnapshot {
+    let claude_path = claude_settings_path();
+    let claude_content = match fs::read_to_string(&claude_path) {
+        Ok(content) => Some(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("备份 Claude 配置失败: {e}")),
+    };
+    let onboarding_content = match fs::read_to_string(claude_mcp_path()) {
+        Ok(content) => Some(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("备份 Claude 引导配置失败: {e}")),
+    };
+    Ok(ConfigSnapshot {
         env_auth_token: reg_get_env_opt(AUTH_TOKEN_ENV),
         env_auth_key: reg_get_env_opt(AUTH_KEY_ENV),
         env_api_key: reg_get_env_opt(LEGACY_AUTH_ENV),
@@ -788,42 +806,74 @@ pub(crate) fn snapshot_config(app: tauri::AppHandle) -> ConfigSnapshot {
         env_opus_model: reg_get_env_opt(OPUS_MODEL_ENV),
         env_haiku_model: reg_get_env_opt(HAIKU_MODEL_ENV),
         editor_contents,
-        claude_content: fs::read_to_string(claude_settings_path()).ok(),
-    }
+        missing_editor_ids,
+        claude_content,
+        onboarding_file: Some(OnboardingSnapshot { content: onboarding_content }),
+    })
 }
 
 #[tauri::command]
 pub(crate) fn restore_config(app: tauri::AppHandle, snapshot: ConfigSnapshot) -> Result<(), String> {
     let settings = read_app_settings(&app);
-    restore_system_env_var(AUTH_TOKEN_ENV, &snapshot.env_auth_token)?;
-    restore_system_env_var(AUTH_KEY_ENV, &snapshot.env_auth_key)?;
-    restore_system_env_var(LEGACY_AUTH_ENV, &snapshot.env_api_key)?;
-    restore_system_env_var(BASE_URL_ENV, &snapshot.env_base_url)?;
-    restore_system_env_var(SONNET_MODEL_ENV, &snapshot.env_sonnet_model)?;
-    restore_system_env_var(OPUS_MODEL_ENV, &snapshot.env_opus_model)?;
-    restore_system_env_var(HAIKU_MODEL_ENV, &snapshot.env_haiku_model)?;
+    let mut errors = Vec::new();
+    for (name, value) in [
+        (AUTH_TOKEN_ENV, &snapshot.env_auth_token),
+        (AUTH_KEY_ENV, &snapshot.env_auth_key),
+        (LEGACY_AUTH_ENV, &snapshot.env_api_key),
+        (BASE_URL_ENV, &snapshot.env_base_url),
+        (SONNET_MODEL_ENV, &snapshot.env_sonnet_model),
+        (OPUS_MODEL_ENV, &snapshot.env_opus_model),
+        (HAIKU_MODEL_ENV, &snapshot.env_haiku_model),
+    ] {
+        if let Err(e) = restore_system_env_var(name, value) {
+            errors.push(format!("{name}: {e}"));
+        }
+    }
     broadcast_env_change();
 
-    // 恢复所有编辑器配置
+    // 某个位置恢复失败后继续恢复其余位置，最后一次性报告错误。
     for (editor_id, content) in &snapshot.editor_contents {
         if let Some(editor) = KNOWN_EDITORS.iter().find(|e| e.id == editor_id.as_str()) {
             let path = resolved_editor_settings_path(editor, &settings);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            write_file_atomic(&path, content)?;
+            if let Err(e) = restore_config_file(&path, Some(content)) { errors.push(e); }
         }
     }
+    for editor_id in &snapshot.missing_editor_ids {
+        if let Some(editor) = KNOWN_EDITORS.iter().find(|e| e.id == editor_id.as_str()) {
+            if let Err(e) = restore_config_file(&resolved_editor_settings_path(editor, &settings), None) { errors.push(e); }
+        }
+    }
+    if let Err(e) = restore_config_file(&claude_settings_path(), snapshot.claude_content.as_deref()) { errors.push(e); }
+    if let Some(onboarding) = &snapshot.onboarding_file {
+        if let Err(e) = restore_config_file(&claude_mcp_path(), onboarding.content.as_deref()) { errors.push(e); }
+    }
 
-    if let Some(content) = &snapshot.claude_content {
-        let path = claude_settings_path();
+    // 取消后同时恢复旧上游，否则文件虽恢复，仍在运行的本地代理却已切到新供应商。
+    let data = read_profiles(&app);
+    if let Some(active) = data.profiles.iter().find(|p| p.is_active && profile_uses_proxy(p)) {
+        let target = profile_as_proxy_target(active);
+        claude_proxy::set_upstream_with_mode(Some(target.upstream), target.mode);
+    } else {
+        claude_proxy::set_upstream(None);
+    }
+    sync_claude_proxy_failover_pool(&data);
+
+    if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+}
+
+fn restore_config_file(path: &Path, content: Option<&str>) -> Result<(), String> {
+    if let Some(content) = content {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        write_file_atomic(&path, content)?;
+        write_file_atomic(path, content)
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("清理切换新建的配置 {} 失败: {e}", path.display())),
+        }
     }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -1015,7 +1065,47 @@ pub(crate) fn open_backups_folder(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub(crate) fn switch_profile(
+pub(crate) async fn switch_profile(app: tauri::AppHandle, id: String) -> Result<SwitchResult, String> {
+    // Shell / launchctl 与文件写入在后台执行，macOS 主线程仍可处理取消和窗口事件。
+    tauri::async_runtime::spawn_blocking(move || {
+        let state_handle = app.clone();
+        switch_profile_blocking(app, state_handle.state::<AppState>(), id)
+    }).await.map_err(|e| format!("切换任务失败: {e}"))?
+}
+
+pub(crate) fn switch_profile_blocking(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<SwitchResult, String> {
+    static SWITCH_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = SWITCH_LOCK.try_lock().map_err(|_| "正在切换 Claude 配置，请稍后重试")?;
+    let snapshot = snapshot_config(app.clone())?;
+    let result = switch_profile_inner(app.clone(), state, id);
+    finish_claude_switch(result, || restore_config(app, snapshot))
+}
+
+fn finish_claude_switch(
+    result: Result<SwitchResult, String>,
+    rollback: impl FnOnce() -> Result<(), String>,
+) -> Result<SwitchResult, String> {
+    match result {
+        Ok(result) if result.success => Ok(result),
+        Ok(mut result) => {
+            match rollback() {
+                Ok(()) => result.rolled_back = true,
+                Err(e) => result.errors.push(format!("恢复之前配置失败: {e}")),
+            }
+            Ok(result)
+        }
+        Err(error) => match rollback() {
+            Ok(()) => Err(format!("{error}；之前配置已恢复")),
+            Err(e) => Err(format!("{error}；恢复之前配置失败: {e}")),
+        },
+    }
+}
+
+fn switch_profile_inner(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
@@ -1043,6 +1133,18 @@ pub(crate) fn switch_profile(
 
     // 切换前只备份配置文件；会话同步不属于切换热路径。
     auto_backup_configs(&app);
+
+    // 先检查全部配置能否解析，再修改环境变量或代理。
+    let editors = detect_installed_editors(&settings);
+    let mut editor_configs = Vec::new();
+    for editor in &editors {
+        let path = resolved_editor_settings_path(editor, &settings);
+        let config = read_config_object(&path, true)?;
+        editor_configs.push((*editor, path, config));
+    }
+    let cp = claude_settings_path();
+    let mut claude_settings = read_config_object(&cp, false)?;
+    read_config_object(&claude_mcp_path(), false)?;
 
     // 经代理的配置：环境变量指向 127.0.0.1，真实上游（base_url / key / 模型）
     // 写入代理状态。openai_chat 由代理翻译协议，勾选接管的 anthropic 由代理透传。
@@ -1072,6 +1174,7 @@ pub(crate) fn switch_profile(
             errors: vec!["已取消".into()],
             profile_name: profile.name,
             cancelled: true,
+            rolled_back: false,
         });
     }
 
@@ -1093,16 +1196,13 @@ pub(crate) fn switch_profile(
             errors: vec!["已取消".into()],
             profile_name: profile.name,
             cancelled: true,
+            rolled_back: false,
         });
     }
 
     emit_switch_progress(&app, 3, "editors");
     // 自动检测已安装的编辑器并逐一写入配置
-    let editors = detect_installed_editors(&settings);
-    for editor in &editors {
-        let path = resolved_editor_settings_path(editor, &settings);
-        // 读取现有配置，文件不存在则使用空 JSON 对象
-        let mut settings = read_json_or_default(&path, serde_json::json!({}));
+    for (editor, path, mut settings) in editor_configs {
         if !settings
             .get("claudeCode.environmentVariables")
             .map(|v| v.is_array())
@@ -1117,10 +1217,7 @@ pub(crate) fn switch_profile(
             apply_auth_to_env_array(arr, &profile.api_key, &effective_base_url);
             apply_role_models_to_env_array(arr, &profile);
         }
-        // 处理 claudeCode.selectedModel: 仅当 profile.model_id 非空时才写入
-        if !profile.model_id.is_empty() {
-            settings["claudeCode.selectedModel"] = serde_json::json!(profile.model_id);
-        }
+        apply_claude_model(&mut settings, "claudeCode.selectedModel", &profile.model_id);
         match write_json(&path, &settings) {
             Ok(_) => {
                 details.editors.insert(editor.id.to_string(), true);
@@ -1139,25 +1236,12 @@ pub(crate) fn switch_profile(
             errors: vec!["已取消".into()],
             profile_name: profile.name,
             cancelled: true,
+            rolled_back: false,
         });
     }
 
     emit_switch_progress(&app, 4, "claude");
-    let cp = claude_settings_path();
-    // 文件不存在时自动创建默认配置
-    let mut settings = read_json_or_default(
-        &cp,
-        serde_json::json!({
-            "permissions": {
-                "allow": [],
-                "deny": []
-            },
-            "env": {}
-        }),
-    );
-    if !settings.is_object() {
-        settings = serde_json::json!({});
-    }
+    let settings = &mut claude_settings;
     if !settings.get("env").map(|v| v.is_object()).unwrap_or(false) {
         settings["env"] = serde_json::json!({});
     }
@@ -1165,10 +1249,7 @@ pub(crate) fn switch_profile(
         apply_auth_to_env_object(env, &profile.api_key, &effective_base_url);
         apply_role_models_to_env_object(env, &profile);
     }
-    // 处理 model: 仅当 profile.model_id 非空时才写入，逻辑与编辑器一致
-    if !profile.model_id.is_empty() {
-        settings["model"] = serde_json::json!(profile.model_id);
-    }
+    apply_claude_model(settings, "model", &profile.model_id);
     match write_json(&cp, &settings) {
         Ok(_) => details.claude = true,
         Err(e) => errors.push(format!("Claude: {}", e)),
@@ -1187,15 +1268,18 @@ pub(crate) fn switch_profile(
             errors: vec!["已取消".into()],
             profile_name: profile.name,
             cancelled: true,
+            rolled_back: false,
         });
     }
 
     emit_switch_progress(&app, 5, "finalize");
-    // Mark active
-    for p in data.profiles.iter_mut() {
-        p.is_active = p.id == profile.id;
+    // 所有位置成功同步后才提交活动标记。
+    if errors.is_empty() {
+        for p in data.profiles.iter_mut() {
+            p.is_active = p.id == profile.id;
+        }
+        write_profiles(&app, &data)?;
     }
-    write_profiles(&app, &data)?;
 
     emit_switch_progress(&app, 6, "done");
 
@@ -1205,7 +1289,16 @@ pub(crate) fn switch_profile(
         errors,
         profile_name: profile.name,
         cancelled: false,
+        rolled_back: false,
     })
+}
+
+pub(crate) fn apply_claude_model(settings: &mut serde_json::Value, key: &str, model: &str) {
+    if model.trim().is_empty() {
+        if let Some(object) = settings.as_object_mut() { object.remove(key); }
+    } else {
+        settings[key] = serde_json::json!(model.trim());
+    }
 }
 
 pub(crate) fn claude_model_from_settings(settings: &serde_json::Value) -> String {
@@ -1370,4 +1463,53 @@ pub(crate) fn import_current(app: tauri::AppHandle, name: String) -> Result<Prof
     data.profiles.push(profile.clone());
     write_profiles(&app, &data)?;
     Ok(profile)
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    fn result(success: bool, cancelled: bool) -> SwitchResult {
+        SwitchResult {
+            success,
+            cancelled,
+            rolled_back: false,
+            profile_name: "test".into(),
+            errors: if success { vec![] } else { vec!["write failed".into()] },
+            results: SwitchDetails { env_vars: true, editors: HashMap::new(), claude: false },
+        }
+    }
+
+    #[test]
+    fn failed_or_cancelled_switch_restores_existing_and_new_files() {
+        for cancelled in [false, true] {
+            let dir = std::env::temp_dir().join(format!("varswitch-rollback-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&dir).unwrap();
+            let existing = dir.join("settings.json");
+            let created = dir.join("new-settings.json");
+            fs::write(&existing, "new configuration").unwrap();
+            fs::write(&created, "new configuration").unwrap();
+            let restored = finish_claude_switch(Ok(result(false, cancelled)), || {
+                restore_config_file(&existing, Some("old configuration"))?;
+                restore_config_file(&created, None)
+            }).unwrap();
+            assert!(!restored.success);
+            assert!(restored.rolled_back);
+            assert_eq!(restored.cancelled, cancelled);
+            assert_eq!(fs::read_to_string(existing).unwrap(), "old configuration");
+            assert!(!created.exists());
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn successful_switch_does_not_rollback_and_errors_report_restore_failures() {
+        let success = finish_claude_switch(Ok(result(true, false)), || panic!("must not rollback success")).unwrap();
+        assert!(success.success);
+        let failure = finish_claude_switch(Ok(result(false, false)), || Err("read only".into())).unwrap();
+        assert!(!failure.rolled_back);
+        assert!(failure.errors.iter().any(|e| e.contains("read only")));
+        let error = finish_claude_switch(Err("write failed".into()), || Err("restore failed".into())).err().unwrap();
+        assert!(error.contains("write failed") && error.contains("restore failed"));
+    }
 }

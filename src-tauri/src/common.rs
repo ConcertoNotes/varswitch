@@ -395,9 +395,11 @@ pub(crate) fn write_private_file(path: &Path, contents: &str) -> Result<(), Stri
 
 
 pub(crate) fn home_dir() -> PathBuf {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    let primary = "USERPROFILE";
+    #[cfg(not(target_os = "windows"))]
+    let primary = "HOME";
+    let home = std::env::var_os(primary).filter(|value| !value.is_empty()).unwrap_or_default();
     PathBuf::from(home)
 }
 
@@ -410,6 +412,25 @@ pub(crate) fn read_json(path: &PathBuf) -> Result<serde_json::Value, String> {
 /// 读取 JSON 文件，如果不存在则返回默认值
 pub(crate) fn read_json_or_default(path: &PathBuf, default: serde_json::Value) -> serde_json::Value {
     read_json(path).unwrap_or(default)
+}
+
+/// 仅文件不存在时使用空对象；无效配置必须报错，避免切换时覆盖用户设置。
+pub(crate) fn read_config_object(path: &Path, allow_jsonc: bool) -> Result<serde_json::Value, String> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::json!({})),
+        Err(e) => return Err(format!("读取配置 {} 失败: {e}", path.display())),
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .or_else(|error| {
+            if allow_jsonc { serde_json::from_str(&crate::opencode::sanitize_jsonc(&raw)) }
+            else { Err(error) }
+        })
+        .map_err(|e| format!("解析配置 {} 失败，未覆盖原文件: {e}", path.display()))?;
+    if !parsed.is_object() {
+        return Err(format!("配置 {} 的根节点必须是 JSON 对象，未覆盖原文件", path.display()));
+    }
+    Ok(parsed)
 }
 
 
@@ -439,84 +460,8 @@ pub(crate) fn reg_set_env(name: &str, value: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn shell_rc_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".zshrc")
-}
-
-/// 从 shell 配置文件中读取 VarSwitch 管理的环境变量值
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn shell_rc_get_env(name: &str) -> Option<String> {
-    let rc = shell_rc_path();
-    let content = fs::read_to_string(&rc).ok()?;
-    // 查找格式: export NAME="value" # VarSwitch-managed
-    let prefix = format!("export {}=\"", name);
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(&prefix) && trimmed.contains("# VarSwitch-managed") {
-            // 提取引号内的值
-            let after_prefix = &trimmed[prefix.len()..];
-            if let Some(end_quote) = after_prefix.find('"') {
-                return Some(after_prefix[..end_quote].to_string());
-            }
-        }
-    }
-    None
-}
-
-/// 在 shell 配置文件中设置环境变量（带 VarSwitch-managed 标记）
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn shell_rc_set_env(name: &str, value: &str) -> Result<(), String> {
-    let rc = shell_rc_path();
-    let content = fs::read_to_string(&rc).unwrap_or_default();
-    let marker = format!("export {}=\"", name);
-    // 过滤掉旧的同名行（仅删除 VarSwitch 管理的行）
-    let mut lines: Vec<&str> = content
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !(trimmed.starts_with(&marker) && trimmed.contains("# VarSwitch-managed"))
-        })
-        .collect();
-    // 添加新行
-    let new_line = format!("export {}=\"{}\" # VarSwitch-managed", name, value);
-    lines.push(&new_line);
-    // 确保文件末尾有换行
-    let mut result = lines.join("\n");
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
-    write_file_atomic(&rc, &result)
-}
-
-/// 从 shell 配置文件中删除 VarSwitch 管理的环境变量
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn shell_rc_delete_env(name: &str) -> Result<(), String> {
-    let rc = shell_rc_path();
-    let content = match fs::read_to_string(&rc) {
-        Ok(c) => c,
-        Err(_) => return Ok(()), // 文件不存在则无需删除
-    };
-    let marker = format!("export {}=\"", name);
-    let lines: Vec<&str> = content
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !(trimmed.starts_with(&marker) && trimmed.contains("# VarSwitch-managed"))
-        })
-        .collect();
-    let mut result = lines.join("\n");
-    if !result.ends_with('\n') && !result.is_empty() {
-        result.push('\n');
-    }
-    write_file_atomic(&rc, &result)
-}
-
-#[cfg(not(target_os = "windows"))]
 pub(crate) fn reg_set_env(name: &str, value: &str) -> Result<(), String> {
-    // 同时设置进程内环境变量和持久化到 shell 配置文件
-    std::env::set_var(name, value);
-    shell_rc_set_env(name, value)
+    crate::shell_env::set(name, Some(value))
 }
 
 #[cfg(target_os = "windows")]
@@ -527,8 +472,7 @@ pub(crate) fn reg_get_env_opt(name: &str) -> Option<String> {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn reg_get_env_opt(name: &str) -> Option<String> {
-    // 优先从 shell 配置文件读取持久化的值，回退到进程环境变量
-    shell_rc_get_env(name).or_else(|| std::env::var(name).ok())
+    crate::shell_env::get(name)
 }
 
 pub(crate) fn reg_get_env(name: &str) -> String {
@@ -547,8 +491,7 @@ pub(crate) fn reg_delete_env(name: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn reg_delete_env(name: &str) -> Result<(), String> {
-    std::env::remove_var(name);
-    shell_rc_delete_env(name)
+    crate::shell_env::set(name, None)
 }
 
 /// Broadcast WM_SETTINGCHANGE so other apps pick up new env vars immediately

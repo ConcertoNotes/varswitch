@@ -17,10 +17,14 @@
 
 use crate::*;
 use aes_gcm::aead::{Aead, Generate, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
+#[cfg(not(test))]
+use aes_gcm::Key;
 
 /// 系统凭据库中的条目标识
+#[cfg(not(test))]
 const KEYRING_SERVICE: &str = "VarSwitch";
+#[cfg(not(test))]
 const KEYRING_USER: &str = "data-encryption-key";
 
 /// 密文前缀：版本号便于日后换算法时平滑升级
@@ -29,13 +33,22 @@ const NONCE_LEN: usize = 12;
 
 /// 进程内缓存主密钥，避免每次读写配置都去敲一次系统凭据库。
 /// None 表示凭据库不可用，此时全部退回明文存储（功能可用性优先）。
+#[cfg(not(test))]
 static MASTER_KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
 
+#[cfg(test)]
+fn master_key() -> Option<&'static [u8; 32]> {
+    static TEST_MASTER_KEY: [u8; 32] = [0x56; 32];
+    Some(&TEST_MASTER_KEY)
+}
+
+#[cfg(not(test))]
 /// 读取或创建主密钥。凭据库不可用时返回 None，调用方据此退回明文。
 fn master_key() -> Option<&'static [u8; 32]> {
     MASTER_KEY.get_or_init(load_or_create_master_key).as_ref()
 }
 
+#[cfg(not(test))]
 fn load_or_create_master_key() -> Option<[u8; 32]> {
     let entry = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
         Ok(entry) => entry,
@@ -72,6 +85,7 @@ fn load_or_create_master_key() -> Option<[u8; 32]> {
     Some(key)
 }
 
+#[cfg(not(test))]
 fn decode_key(encoded: &str) -> Option<[u8; 32]> {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
@@ -287,10 +301,7 @@ mod tests {
     #[test]
     fn encrypting_twice_does_not_double_wrap() {
         let once = encrypt_secret("sk-secret-value");
-        // 凭据库不可用的环境下会退回明文，此时不做二次断言
-        if !is_encrypted(&once) {
-            return;
-        }
+        assert!(is_encrypted(&once));
         assert_eq!(encrypt_secret(&once), once, "已加密的值不应再包一层");
     }
 
@@ -298,9 +309,7 @@ mod tests {
     fn round_trip_recovers_original_value() {
         let secret = "sk-round-trip-测试-🔐";
         let encrypted = encrypt_secret(secret);
-        if !is_encrypted(&encrypted) {
-            return; // 无凭据库的环境（如 CI）退回明文，跳过
-        }
+        assert!(is_encrypted(&encrypted));
         assert_ne!(encrypted, secret, "密文不应等于明文");
         assert!(!encrypted.contains(secret), "密文中不应残留明文");
         assert_eq!(decrypt_secret(&encrypted).unwrap(), secret);
@@ -309,9 +318,7 @@ mod tests {
     #[test]
     fn tampered_ciphertext_is_rejected_not_silently_emptied() {
         let encrypted = encrypt_secret("sk-tamper-check");
-        if !is_encrypted(&encrypted) {
-            return;
-        }
+        assert!(is_encrypted(&encrypted));
         // 改掉 base64 尾部字符模拟损坏/异设备密文
         let mut broken = encrypted[..encrypted.len() - 2].to_string();
         broken.push_str(if encrypted.ends_with("AA") { "BB" } else { "AA" });
@@ -324,9 +331,8 @@ mod tests {
     fn each_encryption_uses_a_fresh_nonce() {
         let first = encrypt_secret("same-input");
         let second = encrypt_secret("same-input");
-        if !is_encrypted(&first) {
-            return;
-        }
+        assert!(is_encrypted(&first));
+        assert!(is_encrypted(&second));
         assert_ne!(first, second, "相同明文两次加密结果必须不同");
     }
 }

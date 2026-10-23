@@ -55,7 +55,7 @@
           <div class="hero-actions">
             <a
               class="button button-primary"
-              href="./releases/VarSwitch_3.1.16_x64-setup.exe"
+              href="./releases/VarSwitch_3.2.7_x64-setup.exe"
               download
               data-download-track
             >
@@ -65,7 +65,7 @@
               全部下载选项<span class="chevron" aria-hidden="true">›</span>
             </a>
           </div>
-          <p class="hero-meta">当前版本 v3.1.16 · 支持 Windows 与 macOS</p>
+          <p class="hero-meta">当前版本 v3.2.7 · 支持 Windows 与 macOS</p>
           <div class="hero-metrics" aria-label="下载统计">
             <button class="sparkle-button" id="downloadCountButton" type="button" aria-label="给 VarSwitch 点个✨">
               <span aria-hidden="true">✨</span><strong id="sparkleCount">—</strong>
@@ -118,7 +118,7 @@
                 <span class="am-side-item"><img src="./icon-usage.svg" alt="" />用量监控</span>
                 <span class="am-side-spacer"></span>
                 <span class="am-side-item"><img class="am-invert" src="./icon-guide.svg" alt="" />设置</span>
-                <span class="am-side-version">VarSwitch v3.1.16</span>
+                <span class="am-side-version">VarSwitch v3.2.7</span>
               </aside>
 
               <section class="am-main">
@@ -214,7 +214,7 @@
             <span>位置同步写入</span>
           </div>
           <div class="stat" data-reveal>
-            <strong>v3.1.16</strong>
+            <strong>v3.2.7</strong>
             <span>当前版本</span>
           </div>
         </div>
@@ -367,7 +367,7 @@
                 <span class="am-side-item"><img src="./icon-usage.svg" alt="" />用量监控</span>
                 <span class="am-side-spacer"></span>
                 <span class="am-side-item"><img class="am-invert" src="./icon-guide.svg" alt="" />设置</span>
-                <span class="am-side-version">VarSwitch v3.1.16</span>
+                <span class="am-side-version">VarSwitch v3.2.7</span>
               </aside>
 
               <section class="am-main">
@@ -465,7 +465,7 @@
               <div class="install-actions">
                 <a
                   class="button button-primary"
-                  href="./releases/VarSwitch_3.1.16_x64-setup.exe"
+                  href="./releases/VarSwitch_3.2.7_x64-setup.exe"
                   download
                   data-download-track
                 >
@@ -473,7 +473,7 @@
                 </a>
               </div>
               <p class="install-files">
-                <span>VarSwitch_3.1.16_x64-setup.exe</span>
+                <span>VarSwitch_3.2.7_x64-setup.exe</span>
               </p>
             </article>
 
@@ -490,7 +490,7 @@
                 <a
                   class="button button-primary"
                   data-mac-download="aarch64"
-                  href="./releases/VarSwitch_3.1.16_aarch64.dmg"
+                  href="./releases/VarSwitch_3.2.7_aarch64.dmg"
                   download
                   data-download-track
                 >
@@ -499,7 +499,7 @@
                 <a
                   class="button button-secondary"
                   data-mac-download="x64"
-                  href="./releases/VarSwitch_3.1.16_x64.dmg"
+                  href="./releases/VarSwitch_3.2.7_x64.dmg"
                   download
                   data-download-track
                 >
@@ -507,16 +507,20 @@
                 </a>
               </div>
               <p class="install-files">
-                <span data-mac-file="aarch64">VarSwitch_3.1.16_aarch64.dmg</span>
-                <span data-mac-file="x64">VarSwitch_3.1.16_x64.dmg</span>
+                <span data-mac-file="aarch64">VarSwitch_3.2.7_aarch64.dmg</span>
+                <span data-mac-file="x64">VarSwitch_3.2.7_x64.dmg</span>
               </p>
               <details class="install-note">
                 <summary>打开时提示「已损坏，无法打开」？</summary>
-                <p>
-                  安装包没有经过 Apple 公证，系统会自动加上隔离标记，文件本身是完好的。把
-                  VarSwitch 拖进「应用程序」后，打开「终端」执行一次下面这行命令，之后就能正常使用。
-                </p>
-                <code>sudo xattr -rd com.apple.quarantine /Applications/VarSwitch.app</code>
+                <ol>
+                  <li>在「苹果菜单」&gt;「关于本机」确认芯片类型，下载对应的 Apple 芯片或 Intel 版本。</li>
+                  <li>打开 DMG，将 VarSwitch 拖到「应用程序」，然后退出 DMG。</li>
+                  <li>打开「终端」，复制并执行下面的命令。</li>
+                  <li>命令成功后，从「应用程序」打开 VarSwitch。</li>
+                </ol>
+                <p>命令会先验证 App 签名，只在校验通过时移除 VarSwitch 自身的下载隔离标记，不会修改系统安全设置。</p>
+                <code>codesign --verify --deep --strict /Applications/VarSwitch.app &amp;&amp; xattr -rd com.apple.quarantine /Applications/VarSwitch.app</code>
+                <p>如果签名校验报错，请删除安装包并从本站重新下载；不要跳过校验或单独移除隔离标记。经 Apple 公证的版本无需此步骤。</p>
               </details>
             </article>
           </div>
@@ -537,8 +541,8 @@
               <p>它帮你管理 Claude Code / API 的 Key、Base URL 和本地配置同步，避免手动改环境变量。</p>
             </details>
             <details class="faq-item" data-reveal>
-              <summary>下载后浏览器提示风险怎么办？</summary>
-              <p>如果出现拦截或无法验证开发者，请联系服务人员确认最新安装包和校验信息。</p>
+              <summary>macOS 提示「已损坏，无法打开」怎么办？</summary>
+              <p>确认从本站下载了正确芯片版本后，到<a href="#install">下载区</a>按步骤验证签名并放行。签名校验失败时请重新下载，不要跳过检查。</p>
             </details>
             <details class="faq-item" data-reveal>
               <summary>切换配置后需要重启终端吗？</summary>
@@ -556,7 +560,7 @@
           <div class="cta-actions">
             <a
               class="button button-primary"
-              href="./releases/VarSwitch_3.1.16_x64-setup.exe"
+              href="./releases/VarSwitch_3.2.7_x64-setup.exe"
               download
               data-download-track
             >

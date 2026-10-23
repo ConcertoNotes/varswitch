@@ -1,32 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script="$(cat build.bat)"
-
-grep -Fq 'set "HAS_BUNDLE_ARG=0"' <<<"$script" || {
-  echo "missing: tracks whether --bundles was supplied" >&2
+grep -Fq 'npm run dev -- %*' dev.bat || {
+  echo "dev.bat must forward to the cross-platform development command" >&2
   exit 1
 }
 
-grep -Fq -- '--bundles nsis' <<<"$script" || {
-  echo "missing: defaults Windows packaging to NSIS" >&2
+grep -Fq 'npm run build -- %*' build.bat || {
+  echo "build.bat must forward to the cross-platform native build command" >&2
   exit 1
 }
 
-grep -Fq 'Recommended installer:' <<<"$script" || {
-  echo "missing: prints the recommended installer path" >&2
-  exit 1
-}
-
-grep -Fq 'set "TEMP=%CD%\src-tauri\target\build-temp"' <<<"$script" || {
-  echo "missing: uses a project-local build temporary directory" >&2
-  exit 1
-}
-
-grep -Fq 'set "TMP=%TEMP%"' <<<"$script" || {
-  echo "missing: keeps TEMP and TMP on the same build drive" >&2
-  exit 1
-}
+node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+assert.equal(pkg.scripts.dev, 'node scripts/dev.mjs');
+assert.equal(pkg.scripts.build, 'node scripts/build.mjs');
+assert.match(pkg.scripts['site:deploy'], /vercel deploy --prod/);
+JS
 
 node -e 'const c=require("./src-tauri/tauri.conf.json"); if(c.bundle?.windows?.nsis?.compression!=="zlib") process.exit(1)' || {
   echo "missing: configures low-memory NSIS zlib compression" >&2

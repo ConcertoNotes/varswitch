@@ -13,6 +13,8 @@ mod claude;
 mod codex;
 mod codex_toolbox;
 mod common;
+#[cfg(not(target_os = "windows"))]
+mod shell_env;
 mod deeplink;
 mod gemini;
 mod grok;
@@ -101,6 +103,35 @@ mod tests {
 
         assert_eq!(claude_model_from_settings(&settings), "claude-sonnet-4-5");
         assert_eq!(claude_model_from_settings(&json!({ "env": {} })), "");
+    }
+
+    #[test]
+    fn switching_to_default_model_clears_previous_cli_and_editor_models() {
+        let mut settings = json!({"model": "old-model", "claudeCode.selectedModel": "old-model", "unrelated": true});
+        apply_claude_model(&mut settings, "model", "");
+        apply_claude_model(&mut settings, "claudeCode.selectedModel", "  ");
+        assert_eq!(settings, json!({"unrelated": true}));
+        apply_claude_model(&mut settings, "model", "  new-model  ");
+        assert_eq!(settings["model"], "new-model");
+    }
+
+    #[test]
+    fn switching_reads_jsonc_without_losing_settings_and_rejects_invalid_files() {
+        let dir = std::env::temp_dir().join(format!("varswitch-jsonc-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert_eq!(read_config_object(&path, true).unwrap(), json!({}));
+        fs::write(&path, "{\n// editor setting\n\"editor.fontSize\": 16,\n\"url\": \"https://example.test\", // trailing comment\n}").unwrap();
+        let config = read_config_object(&path, true).unwrap();
+        assert_eq!(config["editor.fontSize"], 16);
+        assert_eq!(config["url"], "https://example.test");
+        assert!(read_config_object(&path, false).is_err());
+        for raw in ["not json", "[]", "null", "{\"incomplete\":"] {
+            fs::write(&path, raw).unwrap();
+            assert!(read_config_object(&path, true).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1409,11 +1440,12 @@ base_url = "https://chat.example.com/v1"
 
     #[test]
     fn normalize_editor_path_value_appends_settings_json_for_directory_paths() {
+        let directory = PathBuf::from("Editors").join("Cursor").join("User");
         let normalized =
-            normalize_editor_path_value(r"C:\Editors\Cursor\User").expect("path should normalize");
+            normalize_editor_path_value(&directory.to_string_lossy()).expect("path should normalize");
 
         assert!(
-            normalized.ends_with(r"Cursor\User\settings.json"),
+            PathBuf::from(&normalized) == directory.join("settings.json"),
             "directory overrides should resolve to settings.json, got {}",
             normalized
         );
@@ -1436,13 +1468,13 @@ base_url = "https://chat.example.com/v1"
         let mut settings = AppSettings::default();
         settings
             .editor_paths
-            .insert(editor.id.to_string(), r"C:\Custom\VSCode\User".to_string());
+            .insert(editor.id.to_string(), PathBuf::from("Custom").join("VSCode").join("User").to_string_lossy().to_string());
 
         let resolved = resolved_editor_settings_path(editor, &settings);
 
         assert_eq!(
             resolved,
-            PathBuf::from(r"C:\Custom\VSCode\User\settings.json")
+            PathBuf::from("Custom").join("VSCode").join("User").join("settings.json")
         );
     }
 
@@ -1475,6 +1507,10 @@ base_url = "https://chat.example.com/v1"
         let html = r#"
             <a href="./releases/VarSwitch_1.0.0_x64-setup.exe">VarSwitch_1.0.0_x64-setup.exe</a>
             <a href="./releases/VarSwitch_1.2.3_x64-setup.exe">VarSwitch_1.2.3_x64-setup.exe</a>
+            <a href="./releases/VarSwitch_1.0.0_aarch64.dmg">macOS</a>
+            <a href="./releases/VarSwitch_1.2.3_aarch64.dmg">macOS</a>
+            <a href="./releases/VarSwitch_1.0.0_amd64.AppImage">Linux</a>
+            <a href="./releases/VarSwitch_1.2.3_amd64.AppImage">Linux</a>
         "#;
 
         assert_eq!(
