@@ -2,7 +2,7 @@
 
 VarSwitch 是一个面向 Claude Code、Claude Desktop、Codex CLI、Grok CLI、Gemini CLI 和 API 用户的桌面配置管理工具。它通过可视化界面集中管理 API Key / Token、Base URL、模型、编辑器设置、多套应用配置、Skills、Prompts 预设、MCP Server、本机历史会话、Codex 插件市场与移动端控制能力，并提供托盘快速切换、本地代理故障转移、`varswitch://` 深链导入与多设备数据同步。
 
-当前应用版本：`3.2.7`。
+当前应用版本：`3.2.8`。
 
 ## 主要功能
 
@@ -456,8 +456,9 @@ npm run build
 不负责 VarSwitch 的打包，Tauri 会调用 Rust 工具链、macOS 系统工具和 `hdiutil`。
 Mac 本地 ad-hoc 包不包含自动更新签名，只适合本机检查和安装测试。
 
-`dev.bat` 和 `build.bat` 只为 Windows 保留，分别转发到 `npm run dev` 与 `npm run build`。
-Mac 上请使用 npm 命令，不要运行 `.bat` 文件。
+`dev.bat` 是 Windows 的开发入口；`build.bat` 是 Windows 的正式发布入口，会询问版本号和
+更新说明。Windows 只想生成本地测试包时使用 `npm run build`。
+Mac 上正式发布使用 `build.command`，不要运行 `.bat` 文件。
 
 构建产物位于：
 
@@ -493,16 +494,26 @@ Apple 芯片 Mac 和 Intel Mac，不需要在 Windows 电脑上拉代码。
 ## 发布流程
 
 平时本地试运行用 `npm run dev`；只想在 Mac 上打一个本地测试包用 `npm run build`。
-正式发布则双击仓库根目录的 `build.command`，或在终端执行 `./build.command`，输入版本号：
+正式发布则双击仓库根目录的 `build.command`，或在终端执行 `./build.command`。
+Windows 双击 `build.bat`，使用相同流程：
 
 ```bash
 ./build.command
 ```
 
+先输入版本号，再输入本次「修改和变化」（支持多行，单独输入 `.` 后回车结束），然后确认待提交改动。
+例如输入 `修复 Mac 配置切换`、回车、`改善打包流程`、回车、`.`、回车。
+更新说明保存到 `release-notes/v版本号.md`，随代码一起提交，并显示在 GitHub Release 与应用更新提示中。
+非交互发布可用 `npm run release -- --version 3.2.8 --notes-file changes.md`；有未提交改动时
+增加 `--include-worktree` 并确认。
+
 首次使用时确认 Mac mini 的 GitHub SSH 权限可推送 `origin`。脚本会列出当前未提交改动并请你
-确认；确认后将这些改动与版本号一起提交。随后运行前端与 Rust 测试并推送标签；GitHub
+确认；确认后运行前端与 Rust 测试，通过后将这些改动与版本号、更新说明一起提交并推送标签；GitHub
 Actions 随后构建 Windows x64、Apple 芯片 Mac 和 Intel Mac。**不需要切换到 Windows 电脑，也
 不需要在那里 git pull。**
+
+只有看到「发布成功：代码和标签 v版本号 已推送到 GitHub」才表示推送完成；「进程已完成」
+只表示终端脚本退出，报错退出同样会显示它。推送完成后仍需等待 Actions 构建成功，安装包才可用。
 
 等 GitHub Actions 的三平台构建完成后，双击 `deploy.command` 或运行 `./deploy.command`，输入
 同一个版本号；脚本会自动下载 Windows 与两种 Mac 安装包、更新下载页和 updater 清单，再部署

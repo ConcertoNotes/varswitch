@@ -177,4 +177,12 @@ jobs:
             --pattern "VarSwitch_${version}_x64.app.tar.gz.sig"
           node scripts/create-updater-manifest.mjs "$RELEASE_TAG" "$release_dir" > "$RUNNER_TEMP/latest.json"
           gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/latest.json#latest.json" --repo "$GH_REPO" --clobber
-          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false
+          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json body --jq .body > "$RUNNER_TEMP/release-body.md"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { readReleaseNotes, releaseBody } from './scripts/release.mjs';
+          const file = path.join(process.env.RUNNER_TEMP, 'release-body.md');
+          fs.writeFileSync(file, releaseBody(readReleaseNotes(process.env.RELEASE_TAG), fs.readFileSync(file, 'utf8')));
+          JS
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --notes-file "$RUNNER_TEMP/release-body.md" --draft=false

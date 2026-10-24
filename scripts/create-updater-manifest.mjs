@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readReleaseNotes } from './release.mjs';
 
 const DOWNLOAD_DOMAIN = 'https://download.varswitch.strova.top';
 
-export function createManifest(tag, assetDirectory, publishedAt = new Date().toISOString()) {
+export function createManifest(tag, assetDirectory, publishedAt = new Date().toISOString(), notes = readReleaseNotes(tag)) {
   const version = tag.replace(/^v/, '');
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`非法发布标签: ${tag}`);
   const targets = [
@@ -27,7 +28,7 @@ export function createManifest(tag, assetDirectory, publishedAt = new Date().toI
   }
   return {
     version,
-    notes: `VarSwitch update ${version}`,
+    notes: notes || `VarSwitch update ${version}`,
     pub_date: publishedAt.replace(/\.\d+Z$/, 'Z'),
     platforms,
   };

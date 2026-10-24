@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION_FILES = [
@@ -21,13 +22,70 @@ export function parseReleaseArgs(args) {
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === '--version') options.version = args[++i] || '';
     else if (args[i] === '--include-worktree') options.includeWorktree = true;
+    else if (args[i] === '--interactive') options.interactive = true;
+    else if (args[i] === '--notes-file') {
+      options.notesFile = args[++i];
+      if (!options.notesFile) throw new Error('--notes-file 需要一个更新说明文件路径');
+    }
     else if (args[i] === '--help' || args[i] === '-h') options.help = true;
     else throw new Error(`未知参数: ${args[i]}`);
   }
-  if (!options.help && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(options.version)) {
+  if (!options.help && !(options.interactive && !options.version) && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(options.version)) {
     throw new Error('请提供正式版本号，例如 npm run release -- --version 3.2.8');
   }
   return options;
+}
+
+export async function promptReleaseOptions(options, { input = process.stdin, output = process.stdout } = {}) {
+  const terminal = createInterface({ input, crlfDelay: Infinity });
+  const lines = terminal[Symbol.asyncIterator]();
+  const ask = async (prompt) => {
+    output.write(prompt);
+    const line = await lines.next();
+    if (line.done) throw new Error('输入已结束，已取消发布。');
+    return line.value;
+  };
+  try {
+    const version = options.version || (await ask('请输入发布版本号（例如 3.2.8）：')).trim();
+    parseReleaseArgs(['--version', version]);
+    let notes;
+    if (!options.notesFile) {
+      output.write('请输入本次修改和变化（支持多行，单独输入 . 后回车结束）：\n');
+      const changes = [];
+      while (true) {
+        const line = await ask('> ');
+        if (line.trim() === '.') break;
+        changes.push(line);
+      }
+      notes = changes.join('\n').trim();
+      if (!notes) throw new Error('更新说明不能为空，已取消发布。');
+    }
+    return { ...options, version, notes };
+  } finally {
+    terminal.close();
+  }
+}
+
+export function readReleaseNotes(tag, root = ROOT) {
+  const version = tag.replace(/^v/, '');
+  parseReleaseArgs(['--version', version]);
+  const file = path.join(root, 'release-notes', `v${version}.md`);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '';
+}
+
+export function releaseBody(notes, existing) {
+  if (!notes) return existing;
+  const prefix = `## 本次修改和变化\n\n${notes}\n\n`;
+  return existing.startsWith(prefix) ? existing : `${prefix}${existing}`;
+}
+
+export function checkRemoteTag(result, tag) {
+  if (result.error) throw result.error;
+  if (result.status === 0 && result.stdout.trim()) throw new Error(`远端标签 ${tag} 已存在。`);
+  // git ls-remote --exit-code: 2 means no matching ref, which is expected for a new release.
+  if (result.status !== 0 && result.status !== 2) {
+    throw new Error(`无法检查远端标签（退出码 ${result.status}），尚未提交或推送。请检查 origin 网络和权限。\n${result.stderr?.trim() || ''}`);
+  }
 }
 
 export function updateVersionContents(contents, version) {
@@ -105,11 +163,17 @@ async function confirmWorktree(status) {
 }
 
 async function main() {
-  const options = parseReleaseArgs(process.argv.slice(2));
+  let options = parseReleaseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('用法: npm run release -- --version 3.2.8 [--include-worktree]\n\n同步版本、运行测试、提交并推送标签。--include-worktree 会先列出并确认提交当前全部工作区改动。GitHub Actions 随后构建 Windows 与两种 macOS 安装包。');
+    console.log('用法: npm run release -- --interactive [--include-worktree]\n或: npm run release -- --version 3.2.8 --notes-file changes.md [--include-worktree]\n\n交互输入版本号和多行更新说明，同步版本、运行测试、提交并推送标签。更新说明保存到 release-notes/v版本号.md，并显示在 GitHub Release 与应用更新提示中。--include-worktree 会先列出并确认提交当前全部工作区改动。GitHub Actions 随后构建 Windows 与两种 macOS 安装包。');
     return;
   }
+  if (options.interactive) options = await promptReleaseOptions(options);
+  const notes = (options.notesFile
+    ? fs.readFileSync(path.resolve(ROOT, options.notesFile), 'utf8')
+    : options.notes ?? readReleaseNotes(`v${options.version}`)).trim();
+  if (!notes) throw new Error('请填写本次修改和变化：使用 --interactive 交互输入，或 --notes-file 指定更新说明文件。');
+  console.log(`\n发布版本：${options.version}\n本次修改和变化：\n${notes}\n`);
 
   const branchResult = command(['branch', '--show-current'], { capture: true });
   const branch = branchResult.stdout.trim();
@@ -123,8 +187,7 @@ async function main() {
     throw new Error(`本地标签 ${tag} 已存在。`);
   }
   const remoteTag = command(['ls-remote', '--exit-code', '--tags', 'origin', `refs/tags/${tag}`], { capture: true, allowFailure: true });
-  if (remoteTag.status === 0 && remoteTag.stdout.trim()) throw new Error(`远端标签 ${tag} 已存在。`);
-  if (remoteTag.status > 1) throw new Error('无法检查远端标签，请确认 origin 网络和权限正常。');
+  checkRemoteTag(remoteTag, tag);
 
   const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'src-tauri/tauri.conf.json'), 'utf8')).version;
   if (current === options.version) throw new Error(`当前版本已经是 ${options.version}。`);
@@ -143,15 +206,19 @@ async function main() {
     throw error;
   }
 
+  const notesFile = `release-notes/${tag}.md`;
+  fs.mkdirSync(path.join(ROOT, 'release-notes'), { recursive: true });
+  fs.writeFileSync(path.join(ROOT, notesFile), `${notes}\n`);
   console.log('[3/4] 提交版本号并创建发布标签...');
   if (options.includeWorktree) command(['add', '-A']);
-  else command(['add', '--', ...VERSION_FILES]);
+  else command(['add', '--', ...VERSION_FILES, notesFile]);
   command(['commit', '-m', `chore: release ${tag}`]);
   console.log(`[4/4] 推送 ${branch} 与 ${tag}，GitHub Actions 将构建 Windows 和 macOS...`);
   command(['push', 'origin', `HEAD:refs/heads/${branch}`]);
   command(['tag', '-a', tag, '-m', `VarSwitch ${tag}`]);
   command(['push', 'origin', tag]);
-  console.log(`发布构建已触发：https://github.com/ConcertoNotes/varswitch/actions`);
+  console.log(`发布成功：代码和标签 ${tag} 已推送到 GitHub。`);
+  console.log(`GitHub Actions 已触发构建（安装包尚需等待）：https://github.com/ConcertoNotes/varswitch/actions`);
   console.log(`构建及草稿 Release 全部成功后，在 Mac 上运行 npm run release:sync -- --tag ${tag}，再 npm run site:deploy。`);
 }
 

@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { Readable, Writable } from 'node:stream';
 import { buildArgs, parseBuildOptions } from '../scripts/build.mjs';
-import { parseReleaseArgs, updateVersionContents } from '../scripts/release.mjs';
+import { parseReleaseArgs, promptReleaseOptions, checkRemoteTag, readReleaseNotes, releaseBody, updateVersionContents } from '../scripts/release.mjs';
 import { createManifest } from '../scripts/create-updater-manifest.mjs';
 import { normalizeUpdaterManifest, updateDownloadPage } from '../sync-mac-release.mjs';
 
@@ -26,6 +28,68 @@ test('release requires an explicit semantic version', () => {
   assert.deepEqual(parseReleaseArgs(['--version', '4.0.0', '--include-worktree']), { version: '4.0.0', includeWorktree: true });
   assert.throws(() => parseReleaseArgs([]), /正式版本号/);
   assert.throws(() => parseReleaseArgs(['--version', 'latest']), /正式版本号/);
+});
+
+test('interactive release collects a version and multiline changes without losing buffered lines', async () => {
+  const output = new Writable({ write(chunk, encoding, callback) { callback(); } });
+  const options = await promptReleaseOptions(parseReleaseArgs(['--interactive', '--include-worktree']), {
+    input: Readable.from(['3.2.8\n修复 Mac 切换\n- 改善发布流程\n.\n']), output,
+  });
+  assert.equal(options.version, '3.2.8');
+  assert.equal(options.notes, '修复 Mac 切换\n- 改善发布流程');
+  assert.equal(options.includeWorktree, true);
+  for (const text of ['3.2.8\n.\n', '3.2.8\n未完成的说明\n', 'bad-version\n']) {
+    await assert.rejects(promptReleaseOptions(parseReleaseArgs(['--interactive']), {
+      input: Readable.from([text]), output,
+    }), /不能为空|已取消|正式版本号/);
+  }
+  assert.equal(parseReleaseArgs(['--version', '3.2.8', '--notes-file', 'changes.md']).notesFile, 'changes.md');
+  assert.throws(() => parseReleaseArgs(['--version', '3.2.8', '--notes-file']), /文件路径/);
+});
+
+test('new release accepts Git exit code 2 for an absent remote tag, but rejects an existing tag and connection failures', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'varswitch-remote-tag-'));
+  const git = (args, cwd = dir) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result;
+  };
+  try {
+    const bare = path.join(dir, 'remote.git');
+    git(['init', '--bare', bare]);
+    git(['init', path.join(dir, 'work')]);
+    const work = path.join(dir, 'work');
+    git(['remote', 'add', 'origin', bare], work);
+    const check = () => spawnSync('git', ['ls-remote', '--exit-code', '--tags', 'origin', 'refs/tags/v3.2.8'], { cwd: work, encoding: 'utf8' });
+    const missing = check();
+    assert.equal(missing.status, 2);
+    assert.doesNotThrow(() => checkRemoteTag(missing, 'v3.2.8'));
+    git(['-c', 'user.name=Release Test', '-c', 'user.email=test@example.test', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture'], work);
+    git(['-c', 'tag.gpgsign=false', 'tag', 'v3.2.8'], work);
+    git(['push', 'origin', 'refs/tags/v3.2.8'], work);
+    assert.throws(() => checkRemoteTag(check(), 'v3.2.8'), /已存在/);
+    assert.throws(() => checkRemoteTag({ status: 128, stderr: 'Permission denied' }, 'v3.2.8'), /尚未提交或推送[\s\S]*Permission denied/);
+    assert.throws(() => checkRemoteTag({ status: null, error: new Error('git unavailable') }, 'v3.2.8'), /git unavailable/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('versioned release notes survive reading and are included once above installation instructions', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'varswitch-notes-'));
+  try {
+    fs.mkdirSync(path.join(root, 'release-notes'));
+    const notes = '- 修复切换\n- 输入内容保持原样：$1 `test`';
+    fs.writeFileSync(path.join(root, 'release-notes/v3.2.8.md'), `${notes}\n`);
+    assert.equal(readReleaseNotes('v3.2.8', root), notes);
+    assert.equal(readReleaseNotes('v3.2.9', root), '');
+    assert.throws(() => readReleaseNotes('../unsafe', root), /正式版本号/);
+    const body = releaseBody(notes, '## 下载\n\n安装说明');
+    assert.equal(body, `## 本次修改和变化\n\n${notes}\n\n## 下载\n\n安装说明`);
+    assert.equal(releaseBody(notes, body), body);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('version release synchronizes npm, Cargo, README and visible app/site version references', () => {
@@ -66,6 +130,7 @@ test('updater manifest uses all three signatures and stable download-domain URLs
     assert.equal(manifest.platforms['windows-x86_64'].signature, 'signature-0');
     assert.equal(manifest.platforms['darwin-aarch64'].url, 'https://download.varswitch.strova.top/releases/VarSwitch_3.2.8_aarch64.app.tar.gz');
     assert.equal(manifest.platforms['darwin-x86_64'].signature, 'signature-2');
+    assert.equal(createManifest('v3.2.8', dir, undefined, '修复切换\n新增交互说明').notes, '修复切换\n新增交互说明');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -123,8 +188,9 @@ test('published macOS instructions include scoped signature verification and lin
 test('Mac double-click scripts prompt for a version and route release and deploy steps', () => {
   const build = fs.readFileSync('build.command', 'utf8');
   const deploy = fs.readFileSync('deploy.command', 'utf8');
-  assert.match(build, /read -r version/);
-  assert.match(build, /npm run release -- --version "\$version"/);
+  assert.match(build, /npm run release -- --interactive --include-worktree/);
+  assert.match(build, /exit "\$release_exit"/);
+  assert.match(fs.readFileSync('build.bat', 'utf8'), /npm run release -- --interactive --include-worktree %\*/);
   assert.match(deploy, /read -r version/);
   assert.match(deploy, /npm run release:sync -- --tag "\$tag"/);
   assert.match(deploy, /npm run site:deploy/);

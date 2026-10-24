@@ -529,7 +529,7 @@ const I18N = {
     opencodeBaseUrlPlaceholder: "Leave empty to use the provider's official endpoint",
     opencodeOfficialBaseUrl: "Official endpoint",
     opencodeModelLabel: "Model",
-    opencodeModelHint: "Written to the top-level model in opencode.json as provider/model.",
+    opencodeModelHint: "Sets the default model and registers it with the provider so custom gateway models can be selected in OpenCode.",
     opencodeCliLabel: "CLI",
     opencodeInstalled: "Installed",
     opencodeNotInstalled: "Not detected",
@@ -537,7 +537,7 @@ const I18N = {
     opencodeSourceLabel: "Source",
     opencodeConfigMissing: "config not created yet",
     opencodeStatusLoadFailed: "Failed to load OpenCode status",
-    opencodeSwitchedTo: "OpenCode switched to {name}",
+    opencodeSwitchedTo: "OpenCode config saved: {name}. Start a new session to use the default model.",
     opencodeToastAdded: "OpenCode config added",
     opencodeToastUpdated: "OpenCode config updated",
     opencodeToastDeleted: "OpenCode config deleted",
@@ -1278,7 +1278,7 @@ const I18N = {
     opencodeBaseUrlPlaceholder: "留空使用该 provider 的官方地址",
     opencodeOfficialBaseUrl: "官方地址",
     opencodeModelLabel: "模型",
-    opencodeModelHint: "写入 opencode.json 顶层 model，格式为 provider/model。",
+    opencodeModelHint: "设置默认模型并注册到 provider 的模型列表，让自定义网关模型也能在 OpenCode 中选用。",
     opencodeCliLabel: "命令行",
     opencodeInstalled: "已安装",
     opencodeNotInstalled: "未检测到",
@@ -1286,7 +1286,7 @@ const I18N = {
     opencodeSourceLabel: "配置来源",
     opencodeConfigMissing: "配置文件尚未创建",
     opencodeStatusLoadFailed: "OpenCode 状态加载失败",
-    opencodeSwitchedTo: "OpenCode 已切换到 {name}",
+    opencodeSwitchedTo: "OpenCode 配置已写入：{name}。请新建会话使用默认模型。",
     opencodeToastAdded: "OpenCode 配置已添加",
     opencodeToastUpdated: "OpenCode 配置已更新",
     opencodeToastDeleted: "OpenCode 配置已删除",
@@ -6616,8 +6616,7 @@ async function handleGeminiImport() {
 }
 
 // ── OpenCode Profile Management ─────────────────────
-// 切换写入 ~/.config/opencode/opencode.json 的 provider.<id>.options 与顶层 model，
-// 后端只改这几个键，用户的其他配置原样保留（详见 src-tauri/src/opencode.rs 顶部调研注释）。
+// 切换写入 OpenCode 的全局/显式配置，更新凭据、默认模型及模型声明，兼容 V1/V2。
 
 function getSelectedOpenCodePreset() {
   const presetId = $("opencodePresetSelect")?.value || "";

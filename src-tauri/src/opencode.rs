@@ -1,12 +1,12 @@
 //! OpenCode（sst/opencode，开源 AI 编程 CLI/TUI）多套 API 配置管理与一键切换。
 //!
-//! ── 调研结论（2026-08 官方文档 + 源码 + 本机实测）────────────────────────────
+//! ── 配置兼容性（2026-10 官方源码 + macOS OpenCode 2.1.4 实测）──────────────
 //!
 //! 1. 全局配置文件：`~/.config/opencode/opencode.json`（同目录 `opencode.jsonc` 亦可，支持注释）。
 //!    文档：https://opencode.ai/docs/config/#global
 //!    OpenCode 用 xdg-basedir 语义解析目录，该实现在 Windows 上同样落在用户主目录下的
 //!    `.config`（而非 %APPDATA%），本机实测确认存在 `C:\Users\<user>\.config\opencode\opencode.json`。
-//!    `OPENCODE_CONFIG` 环境变量可整体改写配置文件路径。
+//!    同目录 JSONC 后加载，优先于 JSON；`OPENCODE_CONFIG` 是额外覆盖层。
 //!    文档：https://opencode.ai/docs/config/#custom-path
 //!
 //! 2. 认证凭据：TUI 的 `/connect`（旧版 `opencode auth login`）把 API Key 写入
@@ -20,19 +20,22 @@
 //!    并且组装模型请求参数时是
 //!    `if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key`
 //!    —— 即 config 里的 `options.apiKey` 优先级高于 auth.json 与环境变量。
-//!    因此只改 opencode.json 就能确定性生效，同时不会覆盖用户 auth.json 里的 OAuth 登录态
+//!    因此无需覆盖用户 auth.json 里的 OAuth 登录态
 //!    （例如 ChatGPT Plus / Claude Pro 订阅），对用户最无感也最不具破坏性。
 //!    源码：https://github.com/sst/opencode/blob/dev/packages/opencode/src/provider/provider.ts
 //!
-//! 4. 字段格式：provider 块为 `provider.<providerID>.options.{apiKey,baseURL}`；
-//!    默认模型是顶层字符串 `"model": "<providerID>/<modelID>"`。
+//! 4. V1 字段为 `provider.<id>.options.{apiKey,baseURL}`，model 为 `provider/model`。
+//!    V2 原生字段为 `providers.<id>.settings.{apiKey,baseURL}`，model 也可为
+//!    `{ "providerID": "...", "model": "..." }`。已有原生 providers 时必须更新它，
+//!    因为 V2 归一化时原生 provider 会覆盖同 id 的整个 V1 provider。
+//!    自定义模型必须同时在该 provider 的 models 中声明，否则不会进入可选模型列表。
 //!    文档：https://opencode.ai/docs/config/#models、https://opencode.ai/docs/providers/#base-url
 //!
 //! 5. provider id 采用 models.dev 命名：anthropic / openai / deepseek / moonshotai / zhipuai / opencode(Zen) …
 //!    文档：https://opencode.ai/docs/providers/
 //!
-//! 写入策略：只增改本模块管理的键（provider.<id>.options.apiKey / baseURL、顶层 model），
-//! 其余用户配置（其他 provider、models、npm、mcp、permission 等）原样保留；文件与目录不存在则创建；
+//! 写入策略：更新 provider 的凭据、地址、默认模型与必要的模型声明；
+//! 其余用户配置（其他 provider、已有模型定义、npm、mcp、permission 等）保留；文件与目录不存在则创建；
 //! 全部走 `crate::write_file_atomic` 原子写入。
 
 use serde::{Deserialize, Serialize};
@@ -91,7 +94,7 @@ fn opencode_config_dir() -> PathBuf {
     crate::home_dir().join(".config").join("opencode")
 }
 
-/// 实际要读写的配置文件：OPENCODE_CONFIG > 已存在的 opencode.json > 已存在的 opencode.jsonc > 默认 opencode.json。
+/// 实际要读写的配置文件：OPENCODE_CONFIG > 已存在的 opencode.jsonc > 默认 opencode.json。
 fn opencode_config_path() -> PathBuf {
     if let Ok(raw) = std::env::var("OPENCODE_CONFIG") {
         let trimmed = raw.trim();
@@ -99,16 +102,15 @@ fn opencode_config_path() -> PathBuf {
             return PathBuf::from(trimmed);
         }
     }
-    let dir = opencode_config_dir();
-    let json = dir.join("opencode.json");
-    if json.exists() {
-        return json;
-    }
+    preferred_config_path(&opencode_config_dir())
+}
+
+fn preferred_config_path(dir: &Path) -> PathBuf {
     let jsonc = dir.join("opencode.jsonc");
     if jsonc.exists() {
         return jsonc;
     }
-    json
+    dir.join("opencode.json")
 }
 
 /// 配置来源标识，前端状态卡展示用。
@@ -122,7 +124,12 @@ fn opencode_config_source() -> &'static str {
 /// 检测 opencode CLI 是否安装：先扫 PATH，再看官方安装脚本的默认落点。
 fn opencode_installed() -> bool {
     let candidates = if cfg!(windows) {
-        vec!["opencode.exe", "opencode.cmd", "opencode.ps1", "opencode.bat"]
+        vec![
+            "opencode.exe",
+            "opencode.cmd",
+            "opencode.ps1",
+            "opencode.bat",
+        ]
     } else {
         vec!["opencode"]
     };
@@ -349,11 +356,22 @@ fn object_entry<'a>(parent: &'a mut Map<String, Value>, key: &str) -> &'a mut Ma
     slot.as_object_mut().expect("上一步已保证是对象")
 }
 
-/// 把档案落到 OpenCode 配置对象上：只写 provider.<id>.options.{apiKey,baseURL} 与顶层 model，
-/// 其他键（含同一 provider 下的 models / npm / name 等）一律保留。
+/// 同时注册所选模型，保证网关的自定义模型也能在 OpenCode 中选用。
+/// 已有模型的元数据与同一 provider 下的其他配置保留。
 /// base_url 为空表示用官方地址，此时移除我们之前写入的 baseURL 覆盖。
 fn apply_profile_to_config(config: &mut Map<String, Value>, profile: &OpenCodeProfile) {
     let provider_id = normalize_provider_id(&profile.provider_id);
+    let has_provider = |key: &str| {
+        config
+            .get(key)
+            .and_then(|map| map.get(&provider_id))
+            .is_some()
+    };
+    let native = has_provider("providers")
+        || (!has_provider("provider")
+            && (config.contains_key("providers")
+                || config.get("model").is_some_and(Value::is_object)));
+    let model_ref = compose_model_ref(&provider_id, &profile.model);
 
     if !config.contains_key("$schema") {
         config.insert(
@@ -362,9 +380,9 @@ fn apply_profile_to_config(config: &mut Map<String, Value>, profile: &OpenCodePr
         );
     }
 
-    let providers = object_entry(config, "provider");
+    let providers = object_entry(config, if native { "providers" } else { "provider" });
     let provider = object_entry(providers, &provider_id);
-    let options = object_entry(provider, "options");
+    let options = object_entry(provider, if native { "settings" } else { "options" });
 
     options.insert(
         "apiKey".to_string(),
@@ -377,9 +395,17 @@ fn apply_profile_to_config(config: &mut Map<String, Value>, profile: &OpenCodePr
         options.insert("baseURL".to_string(), Value::String(base_url.to_string()));
     }
 
-    let model_ref = compose_model_ref(&provider_id, &profile.model);
     if !model_ref.is_empty() {
-        config.insert("model".to_string(), Value::String(model_ref));
+        let model_id = model_ref.strip_prefix(&format!("{provider_id}/")).unwrap();
+        object_entry(provider, "models")
+            .entry(model_id.to_string())
+            .or_insert_with(|| serde_json::json!({ "name": model_id }));
+        let model = if native {
+            serde_json::json!({ "providerID": provider_id, "model": model_id })
+        } else {
+            Value::String(model_ref)
+        };
+        config.insert("model".to_string(), model);
     }
 }
 
@@ -388,26 +414,48 @@ fn apply_profile_to_config(config: &mut Map<String, Value>, profile: &OpenCodePr
 fn resolve_active_provider(config: &Map<String, Value>) -> (String, String, String, String) {
     let model_ref = config
         .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let providers = config.get("provider").and_then(Value::as_object);
+        .map(|value| {
+            if let Some(model) = value.as_str() {
+                return model.to_string();
+            }
+            match (
+                value.get("providerID").and_then(Value::as_str),
+                value.get("model").and_then(Value::as_str),
+            ) {
+                (Some(provider), Some(model)) => compose_model_ref(provider, model),
+                _ => String::new(),
+            }
+        })
+        .unwrap_or_default();
+    // V2 的原生 provider 优先于同 id 的旧格式 provider，不能只读旧字段。
+    let mut providers = config
+        .get("provider")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(native) = config.get("providers").and_then(Value::as_object) {
+        providers.extend(native.clone());
+    }
 
     let provider_id = model_ref
         .split_once('/')
         .map(|(prefix, _)| prefix.to_string())
         .filter(|prefix| !prefix.is_empty())
         .or_else(|| {
-            providers
-                .filter(|map| map.len() == 1)
-                .and_then(|map| map.keys().next().cloned())
+            (providers.len() == 1)
+                .then(|| providers.keys().next().cloned())
+                .flatten()
         })
         .unwrap_or_default();
 
-    let options = providers
+    let native = config
+        .get("providers")
         .and_then(|map| map.get(&provider_id))
+        .is_some();
+    let options = providers
+        .get(&provider_id)
         .and_then(Value::as_object)
-        .and_then(|entry| entry.get("options"))
+        .and_then(|entry| entry.get(if native { "settings" } else { "options" }))
         .and_then(Value::as_object);
     let api_key = options
         .and_then(|opts| opts.get("apiKey"))
@@ -506,7 +554,10 @@ pub fn switch_opencode_profile(app: tauri::AppHandle, id: String) -> Result<(), 
         .find(|profile| profile.id == id)
         .ok_or("配置未找到")?
         .clone();
-    crate::ensure_secret_usable(&profile.api_key, &format!("OpenCode 配置「{}」", profile.name))?;
+    crate::ensure_secret_usable(
+        &profile.api_key,
+        &format!("OpenCode 配置「{}」", profile.name),
+    )?;
 
     let path = opencode_config_path();
     let mut config = read_opencode_config(&path)?;
@@ -524,7 +575,7 @@ pub fn switch_opencode_profile(app: tauri::AppHandle, id: String) -> Result<(), 
 pub fn get_opencode_runtime_status() -> Result<Value, String> {
     let path = opencode_config_path();
     let exists = path.exists();
-    let config = read_opencode_config(&path).unwrap_or_default();
+    let config = read_opencode_config(&path)?;
     let (provider, model, base_url, api_key) = resolve_active_provider(&config);
 
     Ok(serde_json::json!({
@@ -605,6 +656,10 @@ mod tests {
         assert_eq!(anthropic["npm"], "@ai-sdk/anthropic");
         assert_eq!(anthropic["name"], "公司网关");
         assert!(anthropic["models"]["claude-sonnet-4-5"].is_object());
+        assert_eq!(
+            anthropic["models"]["claude-sonnet-4-6"]["name"],
+            "claude-sonnet-4-6"
+        );
         assert_eq!(anthropic["options"]["timeout"], 600000);
 
         // 我们管理的键被更新（baseURL 去掉末尾斜杠）
@@ -626,7 +681,12 @@ mod tests {
         // 先写入自定义网关，再切回官方（base_url 留空）应移除 baseURL 覆盖
         apply_profile_to_config(
             &mut config,
-            &profile("moonshotai", "sk-kimi", "https://proxy.example.com/v1", "kimi-k2.5"),
+            &profile(
+                "moonshotai",
+                "sk-kimi",
+                "https://proxy.example.com/v1",
+                "kimi-k2.5",
+            ),
         );
         assert_eq!(
             config["provider"]["moonshotai"]["options"]["baseURL"],
@@ -666,9 +726,15 @@ mod tests {
 
     #[test]
     fn model_ref_and_provider_id_are_normalized() {
-        assert_eq!(compose_model_ref("openai", "gpt-5.6-sol"), "openai/gpt-5.6-sol");
+        assert_eq!(
+            compose_model_ref("openai", "gpt-5.6-sol"),
+            "openai/gpt-5.6-sol"
+        );
         // 用户已带前缀时不重复拼接
-        assert_eq!(compose_model_ref("openai", "openai/gpt-5.6-sol"), "openai/gpt-5.6-sol");
+        assert_eq!(
+            compose_model_ref("openai", "openai/gpt-5.6-sol"),
+            "openai/gpt-5.6-sol"
+        );
         assert_eq!(compose_model_ref("openai", "  "), "");
         assert_eq!(normalize_provider_id("  MoonshotAI "), "moonshotai");
         assert_eq!(normalize_provider_id(""), DEFAULT_PROVIDER_ID);
@@ -689,5 +755,164 @@ mod tests {
         assert_eq!(model, "zhipuai/glm-5");
         assert_eq!(base_url, "https://open.bigmodel.cn/api/paas/v4");
         assert_eq!(mask_api_key(&api_key), "sk-zhi****1234");
+    }
+
+    #[test]
+    fn switching_registers_custom_gateway_models_without_replacing_metadata() {
+        let mut config = parse_opencode_config(r#"{
+            "provider": { "anthropic": { "models": {
+                "kimi-k3.1-pro": { "name": "My Kimi", "limit": { "context": 128000, "output": 8000 } }
+            } } }
+        }"#).unwrap();
+        apply_profile_to_config(
+            &mut config,
+            &profile(
+                "anthropic",
+                "key-one",
+                "https://gateway.example",
+                "anthropic/kimi-k3.1-pro",
+            ),
+        );
+        let original = config["provider"]["anthropic"]["models"]["kimi-k3.1-pro"].clone();
+        assert_eq!(original["name"], "My Kimi");
+        assert_eq!(original["limit"]["context"], 128000);
+        apply_profile_to_config(
+            &mut config,
+            &profile(
+                "anthropic",
+                "key-two",
+                "https://gateway.example",
+                "custom-next",
+            ),
+        );
+        assert_eq!(config["model"], "anthropic/custom-next");
+        assert_eq!(
+            config["provider"]["anthropic"]["models"]["custom-next"]["name"],
+            "custom-next"
+        );
+        assert_eq!(
+            config["provider"]["anthropic"]["models"]["kimi-k3.1-pro"],
+            original
+        );
+        assert!(config["provider"]["anthropic"]["models"]
+            .get("anthropic/kimi-k3.1-pro")
+            .is_none());
+    }
+
+    #[test]
+    fn native_v2_provider_is_updated_instead_of_shadowed_legacy_fields() {
+        let mut config = parse_opencode_config(r#"{
+            "model": { "providerID": "anthropic", "model": "old" },
+            "provider": { "anthropic": { "options": { "apiKey": "legacy" } } },
+            "providers": {
+                "anthropic": { "package": "anthropic", "settings": { "apiKey": "native-old", "baseURL": "https://old.example", "timeout": 60000 }, "models": { "old": { "name": "Old" } } },
+                "openai": { "settings": { "apiKey": "unrelated" } }
+            },
+            "permissions": []
+        }"#).unwrap();
+        let selected = profile(
+            "anthropic",
+            "new-key",
+            "https://new.example/",
+            "kimi-k3.1-pro",
+        );
+        apply_profile_to_config(&mut config, &selected);
+        let provider = &config["providers"]["anthropic"];
+        assert_eq!(provider["settings"]["apiKey"], "new-key");
+        assert_eq!(provider["settings"]["baseURL"], "https://new.example");
+        assert_eq!(provider["settings"]["timeout"], 60000);
+        assert_eq!(provider["package"], "anthropic");
+        assert_eq!(provider["models"]["old"]["name"], "Old");
+        assert!(provider["models"]["kimi-k3.1-pro"].is_object());
+        assert_eq!(
+            config["model"],
+            serde_json::json!({ "providerID": "anthropic", "model": "kimi-k3.1-pro" })
+        );
+        assert_eq!(
+            resolve_active_provider(&config),
+            (
+                "anthropic".into(),
+                "anthropic/kimi-k3.1-pro".into(),
+                "https://new.example".into(),
+                "new-key".into()
+            )
+        );
+        assert_eq!(
+            config["providers"]["openai"]["settings"]["apiKey"],
+            "unrelated"
+        );
+        apply_profile_to_config(
+            &mut config,
+            &profile("anthropic", "official", "", "kimi-k3.1-pro"),
+        );
+        assert!(config["providers"]["anthropic"]["settings"]
+            .get("baseURL")
+            .is_none());
+    }
+
+    #[test]
+    fn mixed_format_keeps_legacy_provider_definitions_when_other_providers_are_native() {
+        let mut config = parse_opencode_config(
+            r#"{
+            "providers": { "openai": { "settings": { "apiKey": "native" } } },
+            "provider": { "anthropic": {
+                "npm": "@ai-sdk/anthropic",
+                "models": { "custom": { "name": "Preserved", "options": { "temperature": 0.5 } } },
+                "options": { "apiKey": "old" }
+            } }
+        }"#,
+        )
+        .unwrap();
+        apply_profile_to_config(&mut config, &profile("anthropic", "new-key", "", "custom"));
+        assert!(config["providers"].get("anthropic").is_none());
+        assert_eq!(config["provider"]["anthropic"]["npm"], "@ai-sdk/anthropic");
+        assert_eq!(
+            config["provider"]["anthropic"]["models"]["custom"]["name"],
+            "Preserved"
+        );
+        assert_eq!(resolve_active_provider(&config).3, "new-key");
+    }
+
+    #[test]
+    fn jsonc_wins_and_switch_updates_the_file_opencode_loads_last() {
+        let dir =
+            std::env::temp_dir().join(format!("varswitch-opencode-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let json = dir.join("opencode.json");
+        let jsonc = dir.join("opencode.jsonc");
+        write_opencode_config(&json, &parse_opencode_config(r#"{
+            "model": "anthropic/json-model", "permission": { "bash": "ask" },
+            "provider": { "anthropic": { "options": { "baseURL": "https://old.example" }, "models": { "kept": { "name": "Keep me" } } } }
+        }"#).unwrap()).unwrap();
+        assert_eq!(preferred_config_path(&dir), json);
+        let original_json = fs::read_to_string(&json).unwrap();
+        fs::write(&jsonc, r#"{ // Higher priority
+            "permission": { "edit": "ask" },
+            "model": "anthropic/jsonc-model", "provider": { "anthropic": { "options": { "apiKey": "old" } } },
+        }"#).unwrap();
+        let target = preferred_config_path(&dir);
+        assert_eq!(target, jsonc);
+        let mut config = read_opencode_config(&target).unwrap();
+        assert_eq!(config["model"], "anthropic/jsonc-model");
+        apply_profile_to_config(
+            &mut config,
+            &profile(
+                "anthropic",
+                "selected-key",
+                "https://new.example",
+                "custom-model",
+            ),
+        );
+        write_opencode_config(&target, &config).unwrap();
+        let actual = read_opencode_config(&target).unwrap();
+        assert_eq!(actual["model"], "anthropic/custom-model");
+        assert_eq!(actual["permission"]["edit"], "ask");
+        assert_eq!(fs::read_to_string(&json).unwrap(), original_json);
+        assert_eq!(
+            actual["provider"]["anthropic"]["models"]["custom-model"]["name"],
+            "custom-model"
+        );
+        assert_eq!(resolve_active_provider(&actual).3, "selected-key");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -6,8 +6,8 @@ grep -Fq 'npm run dev -- %*' dev.bat || {
   exit 1
 }
 
-grep -Fq 'npm run build -- %*' build.bat || {
-  echo "build.bat must forward to the cross-platform native build command" >&2
+grep -Fq 'npm run release -- --interactive --include-worktree %*' build.bat || {
+  echo "build.bat must prompt for a version and changes via the cross-platform release command" >&2
   exit 1
 }
 
