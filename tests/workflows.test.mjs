@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { Readable, Writable } from 'node:stream';
+import { Readable, Writable, PassThrough } from 'node:stream';
 import { buildArgs, parseBuildOptions } from '../scripts/build.mjs';
-import { parseReleaseArgs, promptReleaseOptions, checkRemoteTag, readReleaseNotes, releaseBody, updateVersionContents } from '../scripts/release.mjs';
+import { parseReleaseArgs, promptReleaseOptions, checkRemoteTag, readReleaseNotes, releaseBody, updateChangelog, updateVersionContents } from '../scripts/release.mjs';
 import { createManifest } from '../scripts/create-updater-manifest.mjs';
 import { normalizeUpdaterManifest, updateDownloadPage } from '../sync-mac-release.mjs';
 
@@ -45,6 +45,42 @@ test('interactive release collects a version and multiline changes without losin
   }
   assert.equal(parseReleaseArgs(['--version', '3.2.8', '--notes-file', 'changes.md']).notesFile, 'changes.md');
   assert.throws(() => parseReleaseArgs(['--version', '3.2.8', '--notes-file']), /文件路径/);
+});
+
+test('TTY release input edits Chinese with backspace, arrow keys and Ctrl+U', async () => {
+  const originalTerm = process.env.TERM;
+  process.env.TERM = 'xterm-256color';
+  const input = new PassThrough();
+  input.isTTY = true;
+  const modes = [];
+  input.setRawMode = (mode) => { modes.push(mode); };
+  const output = new Writable({ write(chunk, encoding, callback) { callback(); } });
+  output.isTTY = true;
+  output.columns = 40;
+  const result = promptReleaseOptions(parseReleaseArgs(['--interactive']), { input, output });
+  if (originalTerm === undefined) delete process.env.TERM;
+  else process.env.TERM = originalTerm;
+  // readline 收到的是终端按键序列，中文不能按 UTF-8 字节删除。
+  setImmediate(() => input.write('3.2.9\r修复错误\x7f\x7f切换\x1b[D\x7f替\r输入错了\x15优化体验\r.\r'));
+  const options = await result;
+  assert.equal(options.notes, '修复替换\n优化体验');
+  assert.equal(modes[0], true);
+  assert.equal(modes.at(-1), false);
+  input.destroy();
+});
+
+test('release bundles the entered changes for the new version without losing old releases', () => {
+  const original = JSON.stringify({ releases: [
+    { version: '3.2.9', items: [{ text: '旧草稿' }] },
+    { version: '3.2.8', items: [{ text: '旧版说明' }] },
+  ] });
+  const data = JSON.parse(updateChangelog(original, '3.2.9', '- 修复删除\n\n优化弹窗', '2026-10-25'));
+  assert.equal(data.releases.length, 2);
+  assert.deepEqual(data.releases[0], { version: '3.2.9', date: '2026-10-25', items: [
+    { type: 'improve', text: '修复删除' }, { type: 'improve', text: '优化弹窗' },
+  ] });
+  assert.equal(data.releases[1].items[0].text, '旧版说明');
+  assert.throws(() => updateChangelog(original, '3.2.9', ' \n'), /不能为空/);
 });
 
 test('new release accepts Git exit code 2 for an absent remote tag, but rejects an existing tag and connection failures', () => {
@@ -101,15 +137,18 @@ test('version release synchronizes npm, Cargo, README and visible app/site versi
     'src-tauri/Cargo.lock': '[[package]]\nname = "other"\nversion = "1.0.0"\n\n[[package]]\nname = "varswitch"\nversion = "3.2.7"\n',
     'README.md': '当前应用版本：`3.1.17`。\n',
     'public/index.html': 'VarSwitch <span>v3.1.21</span>',
+    'public/changelog.json': '{"releases":[]}',
     'varswitch-download-site/index.html': 'VarSwitch_3.1.16_x64-setup.exe VarSwitch v3.1.16 当前版本 v3.1.16 <strong>v3.1.16</strong>\n<span>当前版本</span>',
   };
-  const updated = updateVersionContents(contents, '3.3.0');
+  const updated = updateVersionContents(contents, '3.3.0', '修复 Mac 切换');
   assert.equal(JSON.parse(updated['package.json']).version, '3.3.0');
   assert.equal(JSON.parse(updated['package-lock.json']).packages[''].version, '3.3.0');
   assert.match(updated['src-tauri/Cargo.toml'], /version = "3\.3\.0"/);
   assert.match(updated['src-tauri/Cargo.lock'], /name = "varswitch"\nversion = "3\.3\.0"/);
   assert.match(updated['README.md'], /`3\.3\.0`/);
   assert.match(updated['public/index.html'], /v3\.3\.0/);
+  assert.equal(JSON.parse(updated['public/changelog.json']).releases[0].version, '3.3.0');
+  assert.equal(JSON.parse(updated['public/changelog.json']).releases[0].items[0].text, '修复 Mac 切换');
   assert.match(updated['varswitch-download-site/index.html'], /VarSwitch_3\.3\.0_x64-setup\.exe VarSwitch v3\.3\.0 当前版本 v3\.3\.0 <strong>v3\.3\.0<\/strong>\n<span>当前版本<\/span>/);
 });
 

@@ -14,6 +14,7 @@ const VERSION_FILES = [
   'src-tauri/Cargo.lock',
   'README.md',
   'public/index.html',
+  'public/changelog.json',
   'varswitch-download-site/index.html',
 ];
 
@@ -37,10 +38,18 @@ export function parseReleaseArgs(args) {
 }
 
 export async function promptReleaseOptions(options, { input = process.stdin, output = process.stdout } = {}) {
-  const terminal = createInterface({ input, crlfDelay: Infinity });
+  // TTY 模式由 readline 管理 UTF-8 字符宽度、退格、光标移动和 Ctrl+U。
+  // 缺少 output 会退回管道模式，由系统回显中文，产生删不干净的残影。
+  const terminal = createInterface({ input, output, terminal: Boolean(input.isTTY && output.isTTY), crlfDelay: Infinity });
+  terminal.on('SIGINT', () => terminal.close());
   const lines = terminal[Symbol.asyncIterator]();
   const ask = async (prompt) => {
-    output.write(prompt);
+    if (terminal.terminal && !terminal.closed) {
+      terminal.setPrompt(prompt);
+      terminal.prompt();
+    } else {
+      output.write(prompt);
+    }
     const line = await lines.next();
     if (line.done) throw new Error('输入已结束，已取消发布。');
     return line.value;
@@ -88,8 +97,19 @@ export function checkRemoteTag(result, tag) {
   }
 }
 
-export function updateVersionContents(contents, version) {
+export function updateChangelog(contents, version, notes, date = new Date().toISOString().slice(0, 10)) {
+  const data = JSON.parse(contents);
+  const items = notes.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    .map((text) => ({ type: 'improve', text: text.replace(/^[-*]\s+/, '') }));
+  if (!items.length) throw new Error('更新说明不能为空');
+  data.releases = [{ version, date, items }, ...(data.releases || []).filter((entry) => entry.version !== version)];
+  data._comment = '发布脚本自动写入，随安装包提供；当前版本首次启动时展示一次。';
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+export function updateVersionContents(contents, version, notes = '') {
   const updated = { ...contents };
+  if (notes) updated['public/changelog.json'] = updateChangelog(updated['public/changelog.json'], version, notes);
   for (const file of ['package.json', 'package-lock.json', 'src-tauri/tauri.conf.json']) {
     const data = JSON.parse(updated[file]);
     if (file === 'package-lock.json') {
@@ -192,7 +212,7 @@ async function main() {
   const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'src-tauri/tauri.conf.json'), 'utf8')).version;
   if (current === options.version) throw new Error(`当前版本已经是 ${options.version}。`);
   const originals = Object.fromEntries(VERSION_FILES.map((file) => [file, fs.readFileSync(path.join(ROOT, file), 'utf8')]));
-  const updated = updateVersionContents(originals, options.version);
+  const updated = updateVersionContents(originals, options.version, notes);
   try {
     for (const file of VERSION_FILES) fs.writeFileSync(path.join(ROOT, file), updated[file]);
     console.log(`[1/4] 版本号已同步为 ${options.version}，运行前端测试...`);

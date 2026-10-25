@@ -694,7 +694,8 @@ pub(crate) async fn install_app_update(app: tauri::AppHandle) -> Result<UpdateDo
                 let app_for_install = app.clone();
                 move || {
                     emit_update_download_progress(&app_for_install, 92, 100, "install");
-                    // 安装器会重启应用，先释放单实例锁，避免新进程被误判为重复启动
+                    // Windows 安装器会拉起新进程，先释放单实例锁。
+                    #[cfg(target_os = "windows")]
                     tauri_plugin_single_instance::destroy(&app_for_install);
                 }
             },
@@ -703,6 +704,14 @@ pub(crate) async fn install_app_update(app: tauri::AppHandle) -> Result<UpdateDo
         .map_err(|e| format!("自动安装更新失败: {e}"))?;
 
     emit_update_download_progress(&app, 100, 100, "done");
+
+    // macOS updater 只替换磁盘上的 .app，不会重启正在运行的旧进程。
+    // 成功后主动重启，新版本才能立即加载本地更新日志；安装失败时保留旧进程与单实例锁。
+    #[cfg(target_os = "macos")]
+    {
+        tauri_plugin_single_instance::destroy(&app);
+        app.request_restart();
+    }
 
     Ok(UpdateDownloadResult {
         latest_version,

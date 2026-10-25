@@ -14,7 +14,7 @@
 //!   展示与计费时先扣除 cache_read / cache_creation 归一化为 fresh input。
 //! - 真实消耗 tokens = fresh_input + output + cache_creation + cache_read
 //! - 缓存命中率 = cache_read / (fresh_input + cache_creation + cache_read)
-//! - 费用 = 各分项 token × 每百万单价（内置定价表 + 模糊匹配）
+//! - 费用 = 各分项 token × 每百万参考单价（价格快照优先，内置旧型号价格兜底）
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -155,6 +155,9 @@ struct UsageRecord {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
+    /// 一小时缓存写入，是 cache_creation_tokens 的子集，不重复计入总量。
+    #[serde(default)]
+    cache_creation_1h_tokens: u64,
     /// unix 秒
     created_at: i64,
     /// Grok CLI 自报的本轮成本（USD），1 tick = 1e-10 USD 已折算
@@ -168,8 +171,8 @@ struct UsageRecord {
 struct CodexTokenEvent {
     signature: String,
     ts_unix: Option<i64>,
-    /// (input, cached_input, output) 增量
-    delta: (u32, u32, u32),
+    /// (input, cached_input, output, cache_write_input) 增量
+    delta: (u32, u32, u32, u32),
     /// 非零增量事件的序号（1 起），零增量为 None
     event_index: Option<u32>,
     model: String,
@@ -220,7 +223,8 @@ static CACHE_DIRTY: AtomicBool = AtomicBool::new(false);
 
 /// 解析结果结构或语义变化时递增，旧缓存文件自动作废。
 /// v2：缺 timestamp 的记录改为跳过（旧缓存可能含回退为扫描时刻的伪时间戳）
-const DISK_CACHE_VERSION: u32 = 2;
+/// v3：保留 Codex 缓存写入计数及 Claude 一小时缓存写入计数。
+const DISK_CACHE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct DiskCache {
@@ -535,27 +539,83 @@ const MODEL_PRICING: &[(&str, f64, f64, f64, f64)] = &[
     ("command-r", 0.15, 0.60, 0.0, 0.0),
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Pricing {
     input: f64,
     output: f64,
-    cache_read: f64,
-    cache_creation: f64,
+    cache_read: Option<f64>,
+    cache_creation: Option<f64>,
+    #[serde(default)]
+    cache_creation_1h: Option<f64>,
 }
 
-fn pricing_map() -> &'static HashMap<&'static str, Pricing> {
-    static MAP: OnceLock<HashMap<&'static str, Pricing>> = OnceLock::new();
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum PricingCondition {
+    InputLength { threshold: u64, inclusive: bool },
+    FreshInput { threshold: u64, inclusive: bool },
+    ShanghaiPeak,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelPricing {
+    rates: Pricing,
+    condition: Option<PricingCondition>,
+    alternate: Option<Pricing>,
+    per_request: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct ReferenceModelPricing {
+    model: String,
+    #[serde(flatten)]
+    pricing: ModelPricing,
+}
+
+#[derive(Deserialize)]
+struct ReferencePricing {
+    source: String,
+    date: String,
+    models: Vec<ReferenceModelPricing>,
+}
+
+fn reference_pricing() -> &'static ReferencePricing {
+    static TABLE: OnceLock<ReferencePricing> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(include_str!("usage-pricing.json"))
+            .expect("bundled usage pricing must be valid")
+    })
+}
+
+fn reference_pricing_map() -> &'static HashMap<String, ModelPricing> {
+    static MAP: OnceLock<HashMap<String, ModelPricing>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        reference_pricing().models.iter()
+            .map(|entry| (entry.model.clone(), entry.pricing)).collect()
+    })
+}
+
+fn pricing_map() -> &'static HashMap<&'static str, ModelPricing> {
+    static MAP: OnceLock<HashMap<&'static str, ModelPricing>> = OnceLock::new();
     MAP.get_or_init(|| {
         MODEL_PRICING
             .iter()
             .map(|(id, input, output, cache_read, cache_creation)| {
                 (
                     *id,
-                    Pricing {
-                        input: *input,
-                        output: *output,
-                        cache_read: *cache_read,
-                        cache_creation: *cache_creation,
+                    ModelPricing {
+                        rates: Pricing {
+                            input: *input,
+                            output: *output,
+                            cache_read: Some(*cache_read),
+                            cache_creation: Some(*cache_creation),
+                            cache_creation_1h: id.starts_with("claude-").then_some(input * 2.0),
+                        },
+                        condition: None,
+                        alternate: None,
+                        per_request: None,
                     },
                 )
             })
@@ -645,7 +705,7 @@ fn strip_model_date_suffix(model_id: &str) -> Option<String> {
 fn strip_reasoning_effort_suffix(model_id: &str) -> Option<String> {
     let (base, suffix) = model_id.rsplit_once('-')?;
     (!base.is_empty()
-        && matches!(suffix, "none" | "minimal" | "low" | "medium" | "high" | "xhigh"))
+        && matches!(suffix, "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"))
     .then(|| base.to_string())
 }
 
@@ -688,15 +748,11 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     candidates
 }
 
-fn should_try_pricing_prefix_match(candidate: &str) -> bool {
-    candidate.len() >= 4 && candidate.contains(|c: char| c.is_ascii_digit() || c == '-')
-}
-
 /// 按模型名缓存查价结果：定价表是编译期常量，缓存永不失效。
 /// 聚合阶段每条记录都要查价，模糊匹配（候选生成 + 前缀扫描）较贵，
 /// 而不同模型名通常只有几十个，缓存后查价从热路径上消失。
-fn cached_model_pricing(model_id: &str) -> Option<Pricing> {
-    static MEMO: OnceLock<Mutex<HashMap<String, Option<Pricing>>>> = OnceLock::new();
+fn cached_model_pricing(model_id: &str) -> Option<ModelPricing> {
+    static MEMO: OnceLock<Mutex<HashMap<String, Option<ModelPricing>>>> = OnceLock::new();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(map) = memo.lock() {
         if let Some(cached) = map.get(model_id) {
@@ -710,11 +766,17 @@ fn cached_model_pricing(model_id: &str) -> Option<Pricing> {
     pricing
 }
 
-/// 查找模型定价：先精确匹配候选，再做「候选-」前缀匹配（取最短表项）
-fn find_model_pricing(model_id: &str) -> Option<Pricing> {
+/// 参考快照优先，旧表兜底。只移除已知装饰/日期，不能把未知型号猜成同系列变体。
+fn find_model_pricing(model_id: &str) -> Option<ModelPricing> {
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return None;
+    }
+    let reference = reference_pricing_map();
+    for candidate in &candidates {
+        if let Some(p) = reference.get(candidate) {
+            return Some(*p);
+        }
     }
     let map = pricing_map();
     for candidate in &candidates {
@@ -723,15 +785,11 @@ fn find_model_pricing(model_id: &str) -> Option<Pricing> {
         }
     }
     for candidate in &candidates {
-        if !should_try_pricing_prefix_match(candidate) {
-            continue;
-        }
-        let prefix = format!("{candidate}-");
-        let mut best: Option<(&str, Pricing)> = None;
+        let mut best: Option<(&str, ModelPricing)> = None;
         for (id, p) in map.iter() {
-            if id.starts_with(&prefix) {
+            if strip_model_date_suffix(id).as_ref() == Some(candidate) {
                 match best {
-                    Some((best_id, _)) if id.len() >= best_id.len() => {}
+                    Some((best_id, _)) if *id <= best_id => {}
                     _ => best = Some((id, *p)),
                 }
             }
@@ -760,26 +818,77 @@ fn fresh_input_tokens(record: &UsageRecord) -> u64 {
     }
 }
 
-/// 计算单条记录的费用（USD）。口径对齐 cc-switch CostCalculator + Grok 自报成本优先规则。
-fn record_cost(record: &UsageRecord) -> f64 {
-    let pricing = cached_model_pricing(&record.model);
-    match pricing {
-        Some(p) => {
-            let billable_input = fresh_input_tokens(record) as f64;
-            let local = billable_input * p.input / 1e6
-                + record.output_tokens as f64 * p.output / 1e6
-                + record.cache_read_tokens as f64 * p.cache_read / 1e6
-                + record.cache_creation_tokens as f64 * p.cache_creation / 1e6;
-            match record.reported_cost {
-                // 自报成本完整时以自报为准（上游 ground truth）
-                Some(reported) if !record.cost_partial => reported,
-                // 自报为部分值（下界）时，token 完整则用本地全额复算
-                _ => local,
+fn real_total_tokens(record: &UsageRecord) -> u64 {
+    fresh_input_tokens(record) + record.output_tokens
+        + record.cache_creation_tokens + record.cache_read_tokens
+}
+
+fn valid_reported_cost(record: &UsageRecord) -> Option<f64> {
+    record.reported_cost.filter(|cost| cost.is_finite() && *cost >= 0.0)
+}
+
+/// 参考站点的工作日高峰按请求发生时间（上海时区）计算，不能用扫描时刻。
+fn is_shanghai_peak(ts: i64) -> bool {
+    let local = ts + 8 * 3600;
+    let weekday = (local.div_euclid(86400) + 3).rem_euclid(7);
+    let hour = local.rem_euclid(86400) / 3600;
+    weekday < 5 && ((9..12).contains(&hour) || (14..18).contains(&hour))
+}
+
+impl ModelPricing {
+    fn rates_for(&self, record: &UsageRecord) -> Pricing {
+        let fresh = fresh_input_tokens(record);
+        let use_alternate = match self.condition {
+            Some(PricingCondition::InputLength { threshold, inclusive }) => {
+                let length = fresh + record.cache_read_tokens + record.cache_creation_tokens;
+                if inclusive { length > threshold } else { length >= threshold }
             }
-        }
-        // 无定价：有自报成本直接采用（哪怕是下界，好过记 0）
-        None => record.reported_cost.unwrap_or(0.0),
+            Some(PricingCondition::FreshInput { threshold, inclusive }) => {
+                if inclusive { fresh > threshold } else { fresh >= threshold }
+            }
+            Some(PricingCondition::ShanghaiPeak) => is_shanghai_peak(record.created_at),
+            None => false,
+        };
+        if use_alternate { self.alternate.unwrap_or(self.rates) } else { self.rates }
     }
+}
+
+/// 未知价格保留 None，汇总显式记录缺失覆盖率；完整的上游费用优先。
+fn record_cost(record: &UsageRecord) -> Option<f64> {
+    let reported = valid_reported_cost(record);
+    if reported.is_some() && !record.cost_partial {
+        return reported;
+    }
+    match (local_record_cost(record), reported) {
+        // 自报下界可能包含参考价无法覆盖的费用，不能被更低估算抹掉。
+        (Some(local), Some(lower_bound)) => Some(local.max(lower_bound)),
+        (local, reported) => local.or(reported),
+    }
+}
+
+fn local_record_cost(record: &UsageRecord) -> Option<f64> {
+    let pricing = cached_model_pricing(&record.model)?;
+    if let Some(cost) = pricing.per_request {
+        return Some(cost);
+    }
+    let p = pricing.rates_for(record);
+    let one_hour = record.cache_creation_1h_tokens.min(record.cache_creation_tokens);
+    let component = |tokens: u64, rate: Option<f64>| {
+        if tokens == 0 { Some(0.0) } else { rate.map(|r| tokens as f64 * r) }
+    };
+    Some((fresh_input_tokens(record) as f64 * p.input
+        + record.output_tokens as f64 * p.output
+        + component(record.cache_read_tokens, p.cache_read)?
+        + component(record.cache_creation_tokens - one_hour, p.cache_creation)?
+        + component(one_hour, p.cache_creation_1h)?) / 1e6)
+}
+
+fn record_cost_is_partial(record: &UsageRecord) -> bool {
+    if !record.cost_partial {
+        return false;
+    }
+    let Some(reported) = valid_reported_cost(record) else { return false };
+    local_record_cost(record).map_or(true, |local| reported > local)
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +957,7 @@ struct ClaudeParsedMessage {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
+    cache_creation_1h_tokens: u64,
     stop_reason: Option<String>,
     timestamp: Option<i64>,
 }
@@ -882,6 +992,19 @@ fn parse_claude_file(path: &Path) -> Result<ParsedFile, String> {
         let Some(usage) = message.get("usage") else { continue };
 
         let get_u64 = |key: &str| usage.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_detail = usage.get("cache_creation");
+        let cache_5m = cache_detail
+            .and_then(|detail| detail.get("ephemeral_5m_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_1h = cache_detail
+            .and_then(|detail| detail.get("ephemeral_1h_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_creation_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(|| cache_5m.saturating_add(cache_1h));
         let parsed = ClaudeParsedMessage {
             model: message
                 .get("model")
@@ -891,7 +1014,8 @@ fn parse_claude_file(path: &Path) -> Result<ParsedFile, String> {
             input_tokens: get_u64("input_tokens"),
             output_tokens: get_u64("output_tokens"),
             cache_read_tokens: get_u64("cache_read_input_tokens"),
-            cache_creation_tokens: get_u64("cache_creation_input_tokens"),
+            cache_creation_tokens,
+            cache_creation_1h_tokens: cache_1h.min(cache_creation_tokens),
             stop_reason: message
                 .get("stop_reason")
                 .and_then(|v| v.as_str())
@@ -942,6 +1066,7 @@ fn parse_claude_file(path: &Path) -> Result<ParsedFile, String> {
             output_tokens: msg.output_tokens,
             cache_read_tokens: msg.cache_read_tokens,
             cache_creation_tokens: msg.cache_creation_tokens,
+            cache_creation_1h_tokens: msg.cache_creation_1h_tokens,
             created_at,
             reported_cost: None,
             cost_partial: false,
@@ -1065,12 +1190,13 @@ fn signature_counters(value: Option<&serde_json::Value>) -> Option<String> {
             .unwrap_or_else(|| "n".to_string())
     };
     Some(format!(
-        "{},{},{},{},{}",
+        "{},{},{},{},{},{}",
         field("input_tokens", None),
         field("cached_input_tokens", Some("cache_read_input_tokens")),
         field("output_tokens", None),
         field("reasoning_output_tokens", None),
         field("total_tokens", None),
+        field("cache_write_input_tokens", Some("cache_creation_input_tokens")),
     ))
 }
 
@@ -1092,6 +1218,7 @@ struct CodexCumulative {
     input: u64,
     cached_input: u64,
     output: u64,
+    cache_write_input: u64,
 }
 
 fn parse_codex_cumulative(total_usage: &serde_json::Value) -> Option<CodexCumulative> {
@@ -1100,6 +1227,8 @@ fn parse_codex_cumulative(total_usage: &serde_json::Value) -> Option<CodexCumula
         "input_tokens",
         "cached_input_tokens",
         "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "cache_creation_input_tokens",
         "output_tokens",
         "reasoning_output_tokens",
         "total_tokens",
@@ -1118,15 +1247,21 @@ fn parse_codex_cumulative(total_usage: &serde_json::Value) -> Option<CodexCumula
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
         output: get("output_tokens"),
+        cache_write_input: total_usage
+            .get("cache_write_input_tokens")
+            .or_else(|| total_usage.get("cache_creation_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
     })
 }
 
-fn codex_compute_delta(prev: &Option<CodexCumulative>, current: &CodexCumulative) -> (u32, u32, u32) {
+fn codex_compute_delta(prev: &Option<CodexCumulative>, current: &CodexCumulative) -> (u32, u32, u32, u32) {
     match prev {
         None => (
             current.input.min(u32::MAX as u64) as u32,
             current.cached_input.min(u32::MAX as u64) as u32,
             current.output.min(u32::MAX as u64) as u32,
+            current.cache_write_input.min(u32::MAX as u64) as u32,
         ),
         Some(p) => (
             current.input.saturating_sub(p.input).min(u32::MAX as u64) as u32,
@@ -1135,6 +1270,10 @@ fn codex_compute_delta(prev: &Option<CodexCumulative>, current: &CodexCumulative
                 .saturating_sub(p.cached_input)
                 .min(u32::MAX as u64) as u32,
             current.output.saturating_sub(p.output).min(u32::MAX as u64) as u32,
+            current
+                .cache_write_input
+                .saturating_sub(p.cache_write_input)
+                .min(u32::MAX as u64) as u32,
         ),
     }
 }
@@ -1307,14 +1446,15 @@ fn parse_codex_file(path: &Path) -> Result<ParsedFile, String> {
                 }
                 previous_token_signature = Some(signature.clone());
 
-                let delta: (u32, u32, u32) = if duplicate_snapshot {
-                    (0, 0, 0)
+                let delta: (u32, u32, u32, u32) = if duplicate_snapshot {
+                    (0, 0, 0, 0)
                 } else if let Some(last) = last {
                     // Codex 提供逐请求精确用量时优先采用（累计快照可能来自多条独立限流通道）
                     (
                         last.input.min(u32::MAX as u64) as u32,
                         last.cached_input.min(u32::MAX as u64) as u32,
                         last.output.min(u32::MAX as u64) as u32,
+                        last.cache_write_input.min(u32::MAX as u64) as u32,
                     )
                 } else if let Some(total) = total.as_ref() {
                     codex_compute_delta(&total_high_water, total)
@@ -1326,12 +1466,20 @@ fn parse_codex_file(path: &Path) -> Result<ParsedFile, String> {
                         high_water.input = high_water.input.max(total.input);
                         high_water.cached_input = high_water.cached_input.max(total.cached_input);
                         high_water.output = high_water.output.max(total.output);
+                        high_water.cache_write_input =
+                            high_water.cache_write_input.max(total.cache_write_input);
                     } else {
                         total_high_water = Some(total);
                     }
                 }
-                // cached ≤ input（防御性钳制）
-                let delta = (delta.0, delta.1.min(delta.0), delta.2);
+                // 缓存读取、写入都是 input 的子集，避免畸形日志扩大总量。
+                let cached_read = delta.1.min(delta.0);
+                let delta = (
+                    delta.0,
+                    cached_read,
+                    delta.2,
+                    delta.3.min(delta.0 - cached_read),
+                );
                 let nonzero_index = if delta.0 == 0 && delta.1 == 0 && delta.2 == 0 {
                     None
                 } else {
@@ -1489,6 +1637,7 @@ fn parse_gemini_file(path: &Path) -> Result<ParsedFile, String> {
             output_tokens: output + thoughts,
             cache_read_tokens: cached,
             cache_creation_tokens: 0,
+            cache_creation_1h_tokens: 0,
             created_at,
             reported_cost: None,
             cost_partial: false,
@@ -1549,7 +1698,8 @@ struct GrokCounters {
     input: u64,
     output: u64,
     cached: u64,
-    cost_ticks: u64,
+    /// 缺失与显式 0 不同：0 也是完整的上游自报成本。
+    cost_ticks: Option<u64>,
     cost_partial: bool,
 }
 
@@ -1559,7 +1709,7 @@ fn parse_grok_counters(value: &serde_json::Value) -> GrokCounters {
         input: get("inputTokens"),
         output: get("outputTokens"),
         cached: get("cachedReadTokens"),
-        cost_ticks: get("costUsdTicks"),
+        cost_ticks: value.get("costUsdTicks").and_then(|v| v.as_u64()),
         cost_partial: value
             .get("costIsPartial")
             .and_then(|v| v.as_bool())
@@ -1641,8 +1791,8 @@ fn parse_grok_file(path: &Path) -> Result<ParsedFile, String> {
             } else {
                 prompt_id.clone()
             };
-            let reported_cost = (turn.cost_ticks > 0)
-                .then(|| turn.cost_ticks as f64 / 10_000_000_000.0);
+            let reported_cost = turn.cost_ticks
+                .map(|ticks| ticks as f64 / 10_000_000_000.0);
             records.push(UsageRecord {
                 request_id: format!("grok_session:{session_id}:{turn_key}:{model}"),
                 app: "grok".to_string(),
@@ -1651,6 +1801,7 @@ fn parse_grok_file(path: &Path) -> Result<ParsedFile, String> {
                 output_tokens: turn.output,
                 cache_read_tokens: turn.cached,
                 cache_creation_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 created_at,
                 reported_cost,
                 cost_partial: event_cost_partial || turn.cost_partial,
@@ -1668,6 +1819,8 @@ fn parse_grok_file(path: &Path) -> Result<ParsedFile, String> {
 #[serde(rename_all = "camelCase")]
 pub struct UsageSummary {
     pub total_requests: u64,
+    pub unpriced_requests: u64,
+    pub partial_cost_requests: u64,
     pub total_cost: f64,
     /// 新增输入（fresh input，已归一化）
     pub input_tokens: u64,
@@ -1692,6 +1845,8 @@ pub struct AppUsageSummary {
 pub struct DailyUsage {
     pub date: String,
     pub requests: u64,
+    pub unpriced_requests: u64,
+    pub partial_cost_requests: u64,
     pub cost: f64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -1707,6 +1862,8 @@ pub struct HourlyUsage {
     /// 该小时（本地整点）起点对应的 unix 秒
     pub hour_start_ts: i64,
     pub requests: u64,
+    pub unpriced_requests: u64,
+    pub partial_cost_requests: u64,
     pub cost: f64,
     pub total_tokens: u64,
 }
@@ -1717,6 +1874,8 @@ pub struct ModelUsageStat {
     pub model: String,
     pub app: String,
     pub requests: u64,
+    pub unpriced_requests: u64,
+    pub partial_cost_requests: u64,
     pub total_tokens: u64,
     pub cost: f64,
     /// 该模型自身的缓存命中率；None 表示没有可缓存输入（无法计算）
@@ -1734,12 +1893,15 @@ pub struct RecentUsageLog {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub total_tokens: u64,
-    pub cost: f64,
+    pub cost: Option<f64>,
+    pub cost_partial: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageDashboard {
+    pub pricing_source: String,
+    pub pricing_date: String,
     pub summary: UsageSummary,
     /// 上一个等长时间窗的汇总（起止均已知时提供，用于环比）
     pub prev_summary: Option<UsageSummary>,
@@ -1928,7 +2090,8 @@ fn collect_all_records(data_dir: &Path) -> CollectOutcome {
                 input_tokens: event.delta.0 as u64,
                 output_tokens: event.delta.2 as u64,
                 cache_read_tokens: event.delta.1 as u64,
-                cache_creation_tokens: 0,
+                cache_creation_tokens: event.delta.3 as u64,
+                cache_creation_1h_tokens: 0,
                 created_at,
                 reported_cost: None,
                 cost_partial: false,
@@ -1958,7 +2121,10 @@ fn summarize(records: &[&UsageRecord]) -> UsageSummary {
     let mut summary = UsageSummary::default();
     for record in records {
         summary.total_requests += 1;
-        summary.total_cost += record_cost(record);
+        let cost = record_cost(record);
+        summary.total_cost += cost.unwrap_or(0.0);
+        summary.unpriced_requests += u64::from(cost.is_none());
+        summary.partial_cost_requests += u64::from(record_cost_is_partial(record));
         summary.input_tokens += fresh_input_tokens(record);
         summary.output_tokens += record.output_tokens;
         summary.cache_read_tokens += record.cache_read_tokens;
@@ -2014,6 +2180,17 @@ fn compute_usage_dashboard(
     tz_offset_minutes: Option<i32>,
 ) -> Result<UsageDashboard, String> {
     let outcome = collect_all_records(data_dir);
+    Ok(aggregate_usage_dashboard(outcome, start_ts, end_ts, app, model, tz_offset_minutes))
+}
+
+fn aggregate_usage_dashboard(
+    outcome: CollectOutcome,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+    app: Option<String>,
+    model: Option<String>,
+    tz_offset_minutes: Option<i32>,
+) -> UsageDashboard {
 
     // 全局按 request_id 去重（等价于 cc-switch 的 INSERT OR IGNORE 主键去重）
     let mut seen: HashMap<&str, usize> = HashMap::new();
@@ -2114,6 +2291,8 @@ fn compute_usage_dashboard(
             DailyUsage {
                 date: format!("{y:04}-{m:02}-{d:02}"),
                 requests: 0,
+                unpriced_requests: 0,
+                partial_cost_requests: 0,
                 cost: 0.0,
                 input_tokens: 0,
                 output_tokens: 0,
@@ -2124,13 +2303,15 @@ fn compute_usage_dashboard(
         });
         let fresh = fresh_input_tokens(record);
         entry.requests += 1;
-        entry.cost += record_cost(record);
+        let cost = record_cost(record);
+        entry.cost += cost.unwrap_or(0.0);
+        entry.unpriced_requests += u64::from(cost.is_none());
+        entry.partial_cost_requests += u64::from(record_cost_is_partial(record));
         entry.input_tokens += fresh;
         entry.output_tokens += record.output_tokens;
         entry.cache_read_tokens += record.cache_read_tokens;
         entry.cache_creation_tokens += record.cache_creation_tokens;
-        // 对齐 cc-switch get_daily_trends：total_tokens = fresh_input + output（不含缓存）
-        entry.total_tokens += fresh + record.output_tokens;
+        entry.total_tokens += real_total_tokens(record);
     }
     let mut daily: Vec<DailyUsage> = {
         let mut pairs: Vec<(i64, DailyUsage)> = daily_map.into_iter().collect();
@@ -2153,12 +2334,17 @@ fn compute_usage_dashboard(
                 let entry = hour_map.entry(hour).or_insert_with(|| HourlyUsage {
                     hour_start_ts: hour * 3600 + tz_offset_secs,
                     requests: 0,
+                    unpriced_requests: 0,
+                    partial_cost_requests: 0,
                     cost: 0.0,
                     total_tokens: 0,
                 });
                 entry.requests += 1;
-                entry.cost += record_cost(record);
-                entry.total_tokens += fresh_input_tokens(record) + record.output_tokens;
+                let cost = record_cost(record);
+                entry.cost += cost.unwrap_or(0.0);
+                entry.unpriced_requests += u64::from(cost.is_none());
+                entry.partial_cost_requests += u64::from(record_cost_is_partial(record));
+                entry.total_tokens += real_total_tokens(record);
             }
             let mut pairs: Vec<(i64, HourlyUsage)> = hour_map.into_iter().collect();
             pairs.sort_by_key(|(hour, _)| *hour);
@@ -2171,6 +2357,8 @@ fn compute_usage_dashboard(
     #[derive(Default)]
     struct ModelAgg {
         requests: u64,
+        unpriced_requests: u64,
+        partial_cost_requests: u64,
         total_tokens: u64,
         cost: f64,
         cache_read_tokens: u64,
@@ -2182,9 +2370,11 @@ fn compute_usage_dashboard(
         let entry = model_map.entry(key).or_default();
         let fresh = fresh_input_tokens(record);
         entry.requests += 1;
-        // 对齐 cc-switch get_model_stats：total_tokens = fresh_input + output（不含缓存）
-        entry.total_tokens += fresh + record.output_tokens;
-        entry.cost += record_cost(record);
+        entry.total_tokens += real_total_tokens(record);
+        let cost = record_cost(record);
+        entry.cost += cost.unwrap_or(0.0);
+        entry.unpriced_requests += u64::from(cost.is_none());
+        entry.partial_cost_requests += u64::from(record_cost_is_partial(record));
         entry.cache_read_tokens += record.cache_read_tokens;
         entry.cacheable_tokens += fresh + record.cache_creation_tokens + record.cache_read_tokens;
     }
@@ -2194,6 +2384,8 @@ fn compute_usage_dashboard(
             model,
             app,
             requests: agg.requests,
+            unpriced_requests: agg.unpriced_requests,
+            partial_cost_requests: agg.partial_cost_requests,
             total_tokens: agg.total_tokens,
             cost: agg.cost,
             cache_hit_rate: (agg.cacheable_tokens > 0)
@@ -2218,9 +2410,9 @@ fn compute_usage_dashboard(
                 output_tokens: record.output_tokens,
                 cache_read_tokens: record.cache_read_tokens,
                 cache_creation_tokens: record.cache_creation_tokens,
-                // 与趋势/模型统计同口径：fresh_input + output（缓存分项另列）
-                total_tokens: fresh + record.output_tokens,
+                total_tokens: real_total_tokens(record),
                 cost: record_cost(record),
+                cost_partial: record_cost_is_partial(record),
             }
         })
         .collect();
@@ -2230,7 +2422,9 @@ fn compute_usage_dashboard(
         parse_errors.truncate(20);
     }
 
-    Ok(UsageDashboard {
+    UsageDashboard {
+        pricing_source: reference_pricing().source.clone(),
+        pricing_date: reference_pricing().date.clone(),
         summary,
         prev_summary,
         by_app,
@@ -2243,8 +2437,12 @@ fn compute_usage_dashboard(
         deferred_files: outcome.deferred_files,
         parse_errors,
         generated_at: now_unix(),
-    })
+    }
 }
+
+#[cfg(test)]
+#[path = "usage_stats_pricing_tests.rs"]
+mod pricing_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2306,11 +2504,12 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_creation_tokens: 100,
+            cache_creation_1h_tokens: 0,
             created_at: 0,
             reported_cost: None,
             cost_partial: false,
         };
-        let cost = record_cost(&claude);
+        let cost = record_cost(&claude).unwrap();
         // 1000*3/1M + 500*15/1M + 200*0.3/1M + 100*3.75/1M = 0.010935
         assert!((cost - 0.010935).abs() < 1e-9);
 
@@ -2323,14 +2522,204 @@ mod tests {
             output_tokens: 0,
             cache_read_tokens: 600,
             cache_creation_tokens: 0,
+            cache_creation_1h_tokens: 0,
             created_at: 0,
             reported_cost: None,
             cost_partial: false,
         };
-        let cost = record_cost(&codex);
+        let cost = record_cost(&codex).unwrap();
         // (1000-600)*2.5/1M + 600*0.25/1M = 0.001 + 0.00015 = 0.00115
         assert!((cost - 0.00115).abs() < 1e-9);
         assert_eq!(fresh_input_tokens(&codex), 400);
+    }
+
+    #[test]
+    fn test_claude_cache_write_durations_and_missing_total() {
+        use serde_json::json;
+        let message = |id: &str, usage: serde_json::Value| json!({
+            "type": "assistant", "timestamp": "2026-10-25T00:00:00Z",
+            "message": {"id": id, "model": "claude-opus-5-5", "usage": usage}
+        });
+        let events = [
+            message("explicit", json!({
+                "cache_creation_input_tokens": 100,
+                "cache_creation": {"ephemeral_5m_input_tokens": 60, "ephemeral_1h_input_tokens": 40}
+            })),
+            message("detail-only", json!({
+                "cache_creation": {"ephemeral_5m_input_tokens": 300, "ephemeral_1h_input_tokens": 200}
+            })),
+            message("bounded", json!({
+                "cache_creation_input_tokens": 100,
+                "cache_creation": {"ephemeral_1h_input_tokens": 1000}
+            })),
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "varswitch-claude-usage-test-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&path, events.iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+        let parsed = parse_claude_file(&path);
+        let _ = fs::remove_file(path);
+        let ParsedFile::Records(records) = parsed.unwrap() else {
+            panic!("expected Claude usage records");
+        };
+        assert_eq!(records.len(), 3);
+        let by_id: HashMap<_, _> = records.iter().map(|record| (record.request_id.as_str(), record)).collect();
+        assert_eq!(by_id["session:explicit"].cache_creation_tokens, 100);
+        assert_eq!(by_id["session:explicit"].cache_creation_1h_tokens, 40);
+        assert_eq!(by_id["session:detail-only"].cache_creation_tokens, 500);
+        assert_eq!(by_id["session:detail-only"].cache_creation_1h_tokens, 200);
+        assert_eq!(by_id["session:bounded"].cache_creation_1h_tokens, 100);
+        // 一小时子计数只影响价格，不能把统计 token 总量再次加一遍。
+        assert_eq!(summarize(&records.iter().collect::<Vec<_>>()).real_total_tokens, 700);
+    }
+
+    fn parse_codex_fixture(events: &[serde_json::Value]) -> ParsedCodexFile {
+        let path = std::env::temp_dir().join(format!(
+            "varswitch-usage-test-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let contents = events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, contents).unwrap();
+        let parsed = parse_codex_file(&path);
+        let _ = fs::remove_file(path);
+        match parsed.unwrap() {
+            ParsedFile::Codex(parsed) => parsed,
+            _ => panic!("expected Codex events"),
+        }
+    }
+
+    #[test]
+    fn test_codex_cache_writes_survive_snapshot_deduplication() {
+        use serde_json::json;
+        let first_usage = json!({
+            "input_tokens": 1000, "cached_input_tokens": 600,
+            "cache_write_input_tokens": 300, "output_tokens": 20,
+            "total_tokens": 1020
+        });
+        let first = json!({
+            "type": "event_msg", "timestamp": "2026-10-25T00:00:00Z",
+            "payload": {
+                "type": "token_count", "rate_limits": {"limit_id": "primary"},
+                "info": {"total_token_usage": first_usage, "last_token_usage": first_usage}
+            }
+        });
+        let mut duplicate = first.clone();
+        duplicate["payload"]["rate_limits"]["limit_id"] = json!("secondary");
+        let second = json!({
+            "type": "event_msg", "timestamp": "2026-10-25T00:01:00Z",
+            "payload": {
+                "type": "token_count", "rate_limits": {"limit_id": "primary"},
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 2100, "cached_input_tokens": 1200,
+                        "cache_write_input_tokens": 700, "output_tokens": 50,
+                        "total_tokens": 2150
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 1100, "cached_input_tokens": 600,
+                        "cache_write_input_tokens": 400, "output_tokens": 30,
+                        "total_tokens": 1130
+                    }
+                }
+            }
+        });
+        let parsed = parse_codex_fixture(&[first, duplicate, second]);
+        assert_eq!(parsed.events[0].delta, (1000, 600, 20, 300));
+        assert_eq!(parsed.events[1].delta, (0, 0, 0, 0));
+        assert_eq!(parsed.events[1].event_index, None);
+        assert_eq!(parsed.events[2].delta, (1100, 600, 30, 400));
+        let fresh_input: u32 = parsed
+            .events
+            .iter()
+            .map(|event| event.delta.0 - event.delta.1 - event.delta.3)
+            .sum();
+        assert_eq!(fresh_input, 200);
+    }
+
+    #[test]
+    fn test_codex_cache_write_cumulative_fallback_and_legacy_logs() {
+        use serde_json::json;
+        let event = |usage: serde_json::Value| json!({
+            "type": "event_msg", "timestamp": "2026-10-25T00:00:00Z",
+            "payload": {"type": "token_count", "info": {"total_token_usage": usage}}
+        });
+        let parsed = parse_codex_fixture(&[
+            event(json!({"input_tokens": 1000, "cached_input_tokens": 600,
+                "cache_write_input_tokens": 300, "output_tokens": 20})),
+            event(json!({"input_tokens": 2100, "cached_input_tokens": 1200,
+                "cache_write_input_tokens": 700, "output_tokens": 50})),
+        ]);
+        assert_eq!(parsed.events[0].delta, (1000, 600, 20, 300));
+        assert_eq!(parsed.events[1].delta, (1100, 600, 30, 400));
+
+        let legacy = parse_codex_fixture(&[event(json!({
+            "input_tokens": 1000, "cache_read_input_tokens": 600, "output_tokens": 20
+        }))]);
+        assert_eq!(legacy.events[0].delta, (1000, 600, 20, 0));
+    }
+
+    #[test]
+    fn test_codex_cache_write_signature_and_input_bounds() {
+        use serde_json::json;
+        let usage = json!({"input_tokens": 1000, "cached_input_tokens": 600,
+            "cache_write_input_tokens": 300, "output_tokens": 20});
+        let mut changed_write = usage.clone();
+        changed_write["cache_write_input_tokens"] = json!(350);
+        assert_ne!(signature_counters(Some(&usage)), signature_counters(Some(&changed_write)));
+        let alias = json!({"input_tokens": 1000, "cache_read_input_tokens": 600,
+            "cache_creation_input_tokens": 300, "output_tokens": 20});
+        assert_eq!(signature_counters(Some(&usage)), signature_counters(Some(&alias)));
+
+        let parsed = parse_codex_fixture(&[json!({
+            "type": "event_msg", "timestamp": "2026-10-25T00:00:00Z",
+            "payload": {"type": "token_count", "info": {"last_token_usage": {
+                "input_tokens": 100, "cached_input_tokens": 80,
+                "cache_write_input_tokens": 50, "output_tokens": 20
+            }}}
+        })]);
+        assert_eq!(parsed.events[0].delta, (100, 80, 20, 20));
+    }
+
+    #[test]
+    fn test_grok_parser_preserves_reported_zero_and_distinguishes_missing_cost() {
+        use serde_json::json;
+        let event = |prompt_id: &str, counters: serde_json::Value| json!({
+            "method": "_x.ai/session/update",
+            "timestamp": 1792886400,
+            "params": {"update": {
+                "sessionUpdate": "turn_completed",
+                "prompt_id": prompt_id,
+                "usage": {"modelUsage": {"grok-4.7": counters}}
+            }}
+        });
+        let counters = json!({"inputTokens": 1000, "outputTokens": 100, "cachedReadTokens": 600});
+        let mut zero_cost = counters.clone();
+        zero_cost["costUsdTicks"] = json!(0);
+        let mut paid = counters.clone();
+        paid["costUsdTicks"] = json!(5_000_000_000_u64);
+        let events = [event("zero", zero_cost), event("missing", counters), event("paid", paid)];
+        let path = std::env::temp_dir().join(format!(
+            "varswitch-grok-usage-test-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&path, events.iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+        let parsed = parse_grok_file(&path);
+        let _ = fs::remove_file(path);
+        let ParsedFile::Records(records) = parsed.unwrap() else {
+            panic!("expected Grok usage records");
+        };
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].reported_cost, Some(0.0));
+        assert_eq!(record_cost(&records[0]), Some(0.0));
+        assert_eq!(records[1].reported_cost, None);
+        assert!(record_cost(&records[1]).unwrap() > 0.0);
+        assert_eq!(records[2].reported_cost, Some(0.5));
+        assert_eq!(record_cost(&records[2]), Some(0.5));
     }
 
     #[test]
@@ -2338,7 +2727,7 @@ mod tests {
         let make_event = |sig: &str| CodexTokenEvent {
             signature: sig.to_string(),
             ts_unix: Some(0),
-            delta: (1, 0, 1),
+            delta: (1, 0, 1, 0),
             event_index: Some(1),
             model: "codex".into(),
         };

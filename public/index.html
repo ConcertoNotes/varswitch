@@ -118,7 +118,7 @@
         <button class="sidebar-item sidebar-settings" data-console-page="settings" type="button">
           <img src="icon-guide.svg" alt=""><span data-i18n="navSettings">设置</span>
         </button>
-        <div class="sidebar-version">VarSwitch <span>v3.2.8</span></div>
+        <div class="sidebar-version">VarSwitch <span>v3.2.9</span></div>
       </aside>
 
       <main class="workspace-main" id="workspaceMain">
@@ -1620,7 +1620,19 @@
     </div>
 
     <div class="toast-container" id="toastContainer"></div>
+    <div class="modal-overlay" id="changelogOverlay">
+      <div class="app-dialog changelog-dialog" role="dialog" aria-modal="true" aria-labelledby="changelogTitle" tabindex="-1">
+        <div class="modal-header">
+          <div><div class="dialog-kicker" id="changelogVersion"></div><h2 id="changelogTitle">更新日志</h2></div>
+          <button class="modal-close" id="changelogClose" type="button" aria-label="关闭">&times;</button>
+        </div>
+        <div class="changelog-content"><ul id="changelogItems"></ul></div>
+        <div class="form-actions"><button class="btn btn-primary" id="changelogConfirm" type="button">知道了</button></div>
+      </div>
+    </div>
+
     <script src="app-helpers.js"></script>
+    <script src="changelog.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

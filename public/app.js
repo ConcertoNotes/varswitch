@@ -2860,6 +2860,68 @@ async function maybeOpenUsageGuide() {
   }
 }
 
+function showChangelogDialog(release) {
+  const overlay = $("changelogOverlay");
+  const list = $("changelogItems");
+  if (!overlay || !list) return Promise.resolve(false);
+  const zh = currentLang === "zh";
+  $("changelogTitle").textContent = zh ? "更新日志" : "What's new";
+  $("changelogVersion").textContent = `VarSwitch v${release.version}${release.date ? ` · ${release.date}` : ""}`;
+  $("changelogConfirm").textContent = zh ? "知道了" : "Got it";
+  $("changelogClose").setAttribute("aria-label", zh ? "关闭" : "Close");
+  list.replaceChildren();
+  for (const item of release.items) {
+    const li = document.createElement("li");
+    li.textContent = item.text;
+    list.appendChild(li);
+  }
+  return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const close = () => {
+      overlay.classList.remove("open");
+      overlay.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey, true);
+      previousFocus?.focus();
+      resolve(true);
+    };
+    const onClick = (event) => {
+      if (event.target === overlay || event.target.closest("#changelogClose, #changelogConfirm")) close();
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); close(); }
+      if (event.key === "Tab") {
+        const first = $("changelogClose");
+        const last = $("changelogConfirm");
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    overlay.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey, true);
+    overlay.classList.add("open");
+    $("changelogConfirm").focus();
+  });
+}
+
+async function showStartupDialogs() {
+  try {
+    await window.VarSwitchChangelog.showOnStartup({
+      getVersion: () => window.__TAURI__.app.getVersion(),
+      storage: localStorage,
+      loadChangelog: async () => {
+        const response = await fetch("changelog.json", { cache: "no-store" });
+        if (!response.ok) throw new Error(`changelog: HTTP ${response.status}`);
+        return response.json();
+      },
+      show: showChangelogDialog,
+    });
+  } catch (error) {
+    console.warn("Startup changelog failed:", error);
+  }
+  // 等更新日志关闭后才展示使用指南，避免两个弹窗互相遮挡。
+  await maybeOpenUsageGuide();
+}
+
 async function checkForUpdates() {
   updateBusy = true;
   updateBusyAction = "check";
@@ -9115,8 +9177,8 @@ const USAGE_APP_ICONS = {
   grok: "grok-color.svg",
 };
 
-// Codex / Gemini / Grok 由服务端自动管理缓存，没有显式缓存写入
-const USAGE_AUTO_CACHE_APPS = new Set(["codex", "gemini", "grok"]);
+// Gemini / Grok 未报告缓存写入时显示 N/A；Codex 日志可包含显式写入。
+const USAGE_AUTO_CACHE_APPS = new Set(["gemini", "grok"]);
 
 function escapeUsageHtml(value) {
   return String(value ?? "")
@@ -9132,11 +9194,33 @@ function usageAppLabel(app) {
 }
 
 function formatUsageCost(cost) {
-  const value = Number(cost) || 0;
+  if (cost == null || !Number.isFinite(Number(cost))) return "—";
+  const value = Number(cost);
   if (value === 0) return "$0.00";
   if (value < 0.01) return `$${value.toFixed(4)}`;
   if (value < 1) return `$${value.toFixed(3)}`;
   return `$${value.toFixed(2)}`;
+}
+
+// 成本缺失和真实零成本必须区分；部分自报金额只能作为下界。
+function usageCostState(cost, stats = {}) {
+  const zh = currentLang === "zh";
+  const requests = Number(stats.totalRequests ?? stats.requests) || 0;
+  const unpriced = Number(stats.unpricedRequests) || 0;
+  const partial = Number(stats.partialCostRequests) || (stats.costPartial ? 1 : 0);
+  const unknown = cost == null || !Number.isFinite(Number(cost)) ||
+    (requests > 0 && unpriced >= requests && partial === 0);
+  const incomplete = unknown || unpriced > 0 || partial > 0;
+  const details = [];
+  if (unpriced > 0) details.push(zh ? `${unpriced} 次请求待定价` : `${unpriced} requests unpriced`);
+  else if (unknown) details.push(zh ? "未找到模型价格" : "Model price unavailable");
+  if (partial > 0) details.push(zh ? `${partial} 次请求仅有部分成本` : `${partial} requests have partial cost`);
+  if (incomplete && !unknown) details.push(zh ? "已知金额下界" : "Known cost lower bound");
+  return {
+    value: unknown ? (zh ? "待定价" : "Unpriced") : `${incomplete ? "≥ " : ""}${formatUsageCost(cost)}`,
+    detail: details.join(" · "),
+    incomplete,
+  };
 }
 
 function formatUsageTokens(tokens) {
@@ -9378,7 +9462,7 @@ function renderUsageDashboard(dashboard) {
   if (empty) empty.hidden = true;
   if (body) body.hidden = false;
 
-  renderUsageHero(dashboard.summary, dashboard.prevSummary || null, dashboard.byApp || []);
+  renderUsageHero(dashboard.summary, dashboard.prevSummary || null, dashboard.byApp || [], dashboard);
   renderUsageTrend(dashboard);
   renderUsageApps(dashboard.byApp || [], dashboard.summary);
   renderUsageModels(dashboard.models || []);
@@ -9410,8 +9494,17 @@ function renderUsageMeta(dashboard) {
   if (dashboard.generatedAt) {
     parts.push((zh ? "更新于 " : "Updated at ") + formatUsageTime(dashboard.generatedAt));
   }
+  if (dashboard.pricingDate) {
+    parts.push((zh ? "参考价快照 " : "Reference prices ") + dashboard.pricingDate);
+  }
+  const costState = usageCostState(dashboard.summary?.totalCost, dashboard.summary);
+  if (costState.detail) parts.push(costState.detail);
   meta.textContent = parts.join(" · ");
-  meta.title = errors.length > 0 ? errors.join("\n") : "";
+  meta.title = [
+    dashboard.pricingSource ? `${zh ? "参考价格" : "Reference prices"}: ${dashboard.pricingSource}` : "",
+    zh ? "按参考价快照及内置兼容价估算，未含渠道倍率；实际账单以服务商为准。" : "Reference snapshot and built-in fallback prices exclude channel multipliers; your provider determines the actual bill.",
+    ...errors,
+  ].filter(Boolean).join("\n");
 }
 
 const USAGE_HERO_ICONS = {
@@ -9453,12 +9546,20 @@ function usageHeroDelta(current, previous, options) {
   return `<span class="usage-hero-delta usage-delta-${tone}" title="${escapeUsageHtml(title)}">${arrow} ${escapeUsageHtml(text)}</span>`;
 }
 
-function renderUsageHero(summary, prevSummary, byApp) {
+function renderUsageHero(summary, prevSummary, byApp, pricing = {}) {
   const grid = $("usageHeroGrid");
   if (!grid) return;
   const zh = currentLang === "zh";
   const cacheRate = `${((Number(summary.cacheHitRate) || 0) * 100).toFixed(1)}%`;
   const prev = prevSummary || null;
+  const costState = usageCostState(summary.totalCost, summary);
+  const prevCostState = prev ? usageCostState(prev.totalCost, prev) : null;
+  const costTitle = [
+    costState.detail,
+    pricing.pricingSource ? `${zh ? "参考价格" : "Reference prices"}: ${pricing.pricingSource}` : "",
+    pricing.pricingDate || "",
+    zh ? "按参考价快照及内置兼容价估算，未含渠道倍率；实际账单以服务商为准。" : "Reference snapshot and built-in fallback prices exclude channel multipliers; your provider determines the actual bill.",
+  ].filter(Boolean).join("\n");
   // 缓存命中率是当前筛选内全部应用/模型的加权聚合；
   // 跨多个应用时在卡片上注明口径，避免被当成某单一工具的命中率
   const apps = Array.isArray(byApp) ? byApp : [];
@@ -9474,10 +9575,11 @@ function renderUsageHero(summary, prevSummary, byApp) {
   const cards = [
     {
       label: zh ? "总成本" : "Total Cost",
-      value: formatUsageCost(summary.totalCost),
-      sub: zh ? "按各模型官方定价估算" : "Estimated with official pricing",
+      value: costState.value,
+      sub: costState.detail || (zh ? "按模型参考价格估算" : "Estimated with reference prices"),
+      title: costTitle,
       accent: "cost",
-      delta: usageHeroDelta(summary.totalCost, prev?.totalCost, {
+      delta: costState.incomplete || prevCostState?.incomplete ? "" : usageHeroDelta(summary.totalCost, prev?.totalCost, {
         lowerIsBetter: true,
         formatter: formatUsageCost,
       }),
@@ -9549,6 +9651,7 @@ function renderUsageApps(byApp, totalSummary) {
     return;
   }
   const totalCost = Number(totalSummary?.totalCost) || 0;
+  const completeTotal = !usageCostState(totalSummary?.totalCost, totalSummary).incomplete;
   const sorted = [...byApp].sort(
     (a, b) => (Number(b.summary?.totalCost) || 0) - (Number(a.summary?.totalCost) || 0)
   );
@@ -9557,14 +9660,15 @@ function renderUsageApps(byApp, totalSummary) {
       const s = entry.summary || {};
       const app = entry.app;
       const cost = Number(s.totalCost) || 0;
+      const costState = usageCostState(s.totalCost, s);
       const sharePct = totalCost > 0 ? (cost / totalCost) * 100 : 0;
       const hitPct = (Number(s.cacheHitRate) || 0) * 100;
-      const autoCache = USAGE_AUTO_CACHE_APPS.has(app);
+      const autoCache = USAGE_AUTO_CACHE_APPS.has(app) && !(Number(s.cacheCreationTokens) > 0);
       const creationValue = autoCache ? "N/A" : formatUsageTokensHuman(s.cacheCreationTokens);
       const creationTitle = autoCache
         ? (zh
-            ? "该工具由服务端自动管理缓存，不产生显式缓存写入费用"
-            : "Cache is managed automatically by the provider; no explicit cache writes")
+            ? "该工具的本地日志未报告缓存写入量"
+            : "This tool’s local logs do not report cache writes")
         : `${formatUsageTokensExact(s.cacheCreationTokens)} tokens`;
       const icon = USAGE_APP_ICONS[app];
       const iconHtml = icon
@@ -9616,7 +9720,7 @@ function renderUsageApps(byApp, totalSummary) {
             <span class="usage-app-hero-avatar">${iconHtml}</span>
             <div class="usage-app-hero-name">
               <strong>${escapeUsageHtml(usageAppLabel(app))}</strong>
-              <small>${zh ? "真实消耗 Tokens" : "Real Tokens Used"}${totalCost > 0 && sorted.length > 1 ? ` · ${zh ? "占总成本" : "cost share"} ${sharePct.toFixed(1)}%` : ""}</small>
+              <small>${zh ? "真实消耗 Tokens" : "Real Tokens Used"}${completeTotal && !costState.incomplete && totalCost > 0 && sorted.length > 1 ? ` · ${zh ? "占总成本" : "cost share"} ${sharePct.toFixed(1)}%` : ""}</small>
             </div>
           </div>
           <div class="usage-app-hero-kpis">
@@ -9624,9 +9728,9 @@ function renderUsageApps(byApp, totalSummary) {
               <small>${zh ? "总请求数" : "Requests"}</small>
               <strong>${escapeUsageHtml(formatUsageTokensExact(s.totalRequests))}</strong>
             </div>
-            <div class="usage-app-hero-kpi usage-kpi-cost">
+            <div class="usage-app-hero-kpi usage-kpi-cost" title="${escapeUsageHtml(costState.detail)}">
               <small>${zh ? "总成本" : "Total Cost"}</small>
-              <strong>${escapeUsageHtml(formatUsageCost(cost))}</strong>
+              <strong>${escapeUsageHtml(costState.value)}</strong>
             </div>
           </div>
         </div>
@@ -9670,6 +9774,8 @@ function buildUsageTrendSlots(dashboard) {
         cost: Number(entry?.cost) || 0,
         tokens: Number(entry?.totalTokens) || 0,
         requests: Number(entry?.requests) || 0,
+        unpricedRequests: Number(entry?.unpricedRequests) || 0,
+        partialCostRequests: Number(entry?.partialCostRequests) || 0,
         future: ts > nowSec,
       });
       if (slots.length >= 49) break;
@@ -9692,6 +9798,8 @@ function buildUsageTrendSlots(dashboard) {
         cost: Number(entry?.cost) || 0,
         tokens: Number(entry?.totalTokens) || 0,
         requests: Number(entry?.requests) || 0,
+        unpricedRequests: Number(entry?.unpricedRequests) || 0,
+        partialCostRequests: Number(entry?.partialCostRequests) || 0,
         future: false,
       });
       cursor.setDate(cursor.getDate() + 1);
@@ -9705,6 +9813,8 @@ function buildUsageTrendSlots(dashboard) {
         cost: Number(d.cost) || 0,
         tokens: Number(d.totalTokens) || 0,
         requests: Number(d.requests) || 0,
+        unpricedRequests: Number(d.unpricedRequests) || 0,
+        partialCostRequests: Number(d.partialCostRequests) || 0,
         future: false,
       });
     });
@@ -9717,10 +9827,11 @@ function renderUsageTrend(dashboard) {
   if (!chart) return;
   const zh = currentLang === "zh";
   const { mode, slots } = buildUsageTrendSlots(dashboard);
-
+  const completeCosts = slots.every((s) => !usageCostState(s.cost, s).incomplete);
+  const intervalLabel = mode === "hourly" ? (zh ? "按小时" : "Hourly") : (zh ? "按天" : "Daily");
   setText(
     "usageTrendHint",
-    mode === "hourly" ? (zh ? "按小时" : "Hourly") : (zh ? "按天" : "Daily")
+    intervalLabel + (completeCosts ? "" : (zh ? " · 仅展示已知成本" : " · Known costs only"))
   );
 
   const footer = $("usageTrendFooter");
@@ -9734,12 +9845,13 @@ function renderUsageTrend(dashboard) {
   const scale = maxCost > 0 ? maxCost : 1;
   // 标签密度：最多约 12 个可见标签
   const labelStep = Math.max(1, Math.ceil(slots.length / 12));
-  const peakIndex = maxCost > 0 ? slots.findIndex((s) => s.cost === maxCost) : -1;
+  const peakIndex = completeCosts && maxCost > 0 ? slots.findIndex((s) => s.cost === maxCost) : -1;
 
   chart.innerHTML = slots
     .map((slot, index) => {
       const heightPct = Math.max((slot.cost / scale) * 100, slot.cost > 0 ? 2.5 : 0);
-      const title = `${slot.fullLabel} · ${formatUsageCost(slot.cost)} · ${formatUsageTokens(slot.tokens)} tokens · ${slot.requests} ${zh ? "次请求" : "requests"}`;
+      const costState = usageCostState(slot.cost, slot);
+      const title = `${slot.fullLabel} · ${costState.value}${costState.detail ? ` · ${costState.detail}` : ""} · ${formatUsageTokens(slot.tokens)} tokens · ${slot.requests} ${zh ? "次请求" : "requests"}`;
       const colClasses = ["usage-trend-col"];
       if (slot.future) colClasses.push("usage-trend-future");
       if (index === peakIndex) colClasses.push("usage-trend-peak");
@@ -9761,8 +9873,14 @@ function renderUsageTrend(dashboard) {
     const totalRequests = slots.reduce((sum, s) => sum + s.requests, 0);
     const activeSlots = slots.filter((s) => s.cost > 0 || s.requests > 0).length;
     const unit = mode === "hourly" ? (zh ? "小时" : "hours") : (zh ? "天" : "days");
+    const costState = usageCostState(totalCost, {
+      requests: totalRequests,
+      unpricedRequests: slots.reduce((sum, s) => sum + s.unpricedRequests, 0),
+      partialCostRequests: slots.reduce((sum, s) => sum + s.partialCostRequests, 0),
+    });
     const parts = [
-      `${zh ? "合计" : "Total"} ${formatUsageCost(totalCost)}`,
+      `${zh ? "合计" : "Total"} ${costState.value}`,
+      ...(costState.detail ? [costState.detail] : []),
       `${formatUsageTokens(totalRequests)} ${zh ? "次请求" : "requests"}`,
       `${activeSlots}/${slots.length} ${unit}${zh ? "有用量" : " active"}`,
     ];
@@ -9783,9 +9901,11 @@ function renderUsageModels(models) {
     return;
   }
   const totalCost = models.reduce((sum, m) => sum + (Number(m.cost) || 0), 0);
+  const completeCosts = models.every((m) => !usageCostState(m.cost, m).incomplete);
   tbody.innerHTML = models
     .map((m) => {
       const cost = Number(m.cost) || 0;
+      const costState = usageCostState(m.cost, m);
       const sharePct = totalCost > 0 ? (cost / totalCost) * 100 : 0;
       // cacheHitRate 为 null 表示该模型没有可缓存输入，显示 “--” 与 0% 区分
       const hitRate =
@@ -9797,10 +9917,10 @@ function renderUsageModels(models) {
         <td>${escapeUsageHtml(formatUsageTokens(m.requests))}</td>
         <td>${escapeUsageHtml(formatUsageTokens(m.totalTokens))}</td>
         <td>${escapeUsageHtml(hitRate)}</td>
-        <td class="usage-td-cost">${escapeUsageHtml(formatUsageCost(cost))}</td>
-        <td class="usage-td-share">
+        <td class="usage-td-cost" title="${escapeUsageHtml(costState.detail)}">${escapeUsageHtml(costState.value)}</td>
+        <td class="usage-td-share">${completeCosts ? `
           <div class="usage-share-track"><div class="usage-share-fill" style="width:${Math.min(sharePct, 100).toFixed(1)}%"></div></div>
-          <span class="usage-share-text">${sharePct.toFixed(1)}%</span>
+          <span class="usage-share-text">${sharePct.toFixed(1)}%</span>` : "—"}
         </td>
       </tr>`;
     })
@@ -9820,16 +9940,17 @@ function renderUsageRecent(recent) {
     return;
   }
   tbody.innerHTML = recent
-    .map(
-      (log) => `
+    .map((log) => {
+      const costState = usageCostState(log.cost, log);
+      return `
       <tr>
         <td class="usage-td-time" title="${escapeUsageHtml(formatUsageTime(log.time))}">${escapeUsageHtml(formatUsageRelTime(log.time))}</td>
         <td><span class="usage-app-badge usage-app-${escapeUsageHtml(log.app)}">${escapeUsageHtml(usageAppLabel(log.app))}</span></td>
         <td class="usage-td-model" title="${escapeUsageHtml(log.model)}">${escapeUsageHtml(log.model)}</td>
-        <td title="${zh ? "输入" : "In"} ${escapeUsageHtml(formatUsageTokens(log.inputTokens))} / ${zh ? "输出" : "Out"} ${escapeUsageHtml(formatUsageTokens(log.outputTokens))} / ${zh ? "缓存读" : "Cache read"} ${escapeUsageHtml(formatUsageTokens(log.cacheReadTokens))}">${escapeUsageHtml(formatUsageTokens(log.totalTokens))}</td>
-        <td class="usage-td-cost">${escapeUsageHtml(formatUsageCost(log.cost))}</td>
-      </tr>`
-    )
+        <td title="${zh ? "输入" : "In"} ${escapeUsageHtml(formatUsageTokens(log.inputTokens))} / ${zh ? "输出" : "Out"} ${escapeUsageHtml(formatUsageTokens(log.outputTokens))} / ${zh ? "缓存读" : "Cache read"} ${escapeUsageHtml(formatUsageTokens(log.cacheReadTokens))} / ${zh ? "缓存写" : "Cache write"} ${escapeUsageHtml(formatUsageTokens(log.cacheCreationTokens))}">${escapeUsageHtml(formatUsageTokens(log.totalTokens))}</td>
+        <td class="usage-td-cost" title="${escapeUsageHtml(costState.detail)}">${escapeUsageHtml(costState.value)}</td>
+      </tr>`;
+    })
     .join("");
 }
 
@@ -11861,6 +11982,6 @@ function renderSidebarVersion() {
   }
 
   setTimeout(() => {
-    maybeOpenUsageGuide().catch(() => {});
+    showStartupDialogs().catch((error) => console.warn("Startup dialogs failed:", error));
   }, 250);
 })();

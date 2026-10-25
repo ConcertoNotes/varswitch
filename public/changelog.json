@@ -1,6 +1,30 @@
 {
-  "_comment": "由 build.bat 调用 changelog.mjs 在打包时录入，应用升级后首次启动以弹窗展示。可手动编辑，type 取值 new（新功能）/ improve（优化）/ fix（修复）。",
+  "_comment": "发布脚本自动写入，随安装包提供；当前版本首次启动时展示一次。",
   "releases": [
+    {
+      "version": "3.2.9",
+      "date": "2026-10-25",
+      "items": [
+        {
+          "type": "improve",
+          "text": "修复日志不显示的问题"
+        },
+        {
+          "type": "improve",
+          "text": "修复用量统计中价格不展示的问题"
+        }
+      ]
+    },
+    {
+      "version": "3.2.8",
+      "date": "2026-10-24",
+      "items": [
+        {
+          "type": "improve",
+          "text": "修改了macopencode配置无法切换的问题"
+        }
+      ]
+    },
     {
       "version": "3.2.7",
       "date": "2026-10-21",

@@ -2,7 +2,7 @@
 
 VarSwitch 是一个面向 Claude Code、Claude Desktop、Codex CLI、Grok CLI、Gemini CLI 和 API 用户的桌面配置管理工具。它通过可视化界面集中管理 API Key / Token、Base URL、模型、编辑器设置、多套应用配置、Skills、Prompts 预设、MCP Server、本机历史会话、Codex 插件市场与移动端控制能力，并提供托盘快速切换、本地代理故障转移、`varswitch://` 深链导入与多设备数据同步。
 
-当前应用版本：`3.2.8`。
+当前应用版本：`3.2.9`。
 
 ## 主要功能
 
@@ -504,6 +504,9 @@ Windows 双击 `build.bat`，使用相同流程：
 先输入版本号，再输入本次「修改和变化」（支持多行，单独输入 `.` 后回车结束），然后确认待提交改动。
 例如输入 `修复 Mac 配置切换`、回车、`改善打包流程`、回车、`.`、回车。
 更新说明保存到 `release-notes/v版本号.md`，随代码一起提交，并显示在 GitHub Release 与应用更新提示中。
+同时自动写入安装包内的 `public/changelog.json`；新版本首次启动会离线弹出本次更新日志，关闭后
+同一版本不再重复展示。日志先于使用指南显示。终端输入支持中文退格、方向键修改，以及 `Ctrl+U` 清空当前行。
+macOS 应用内更新成功后会自动重启进入新版本并展示日志。
 非交互发布可用 `npm run release -- --version 3.2.8 --notes-file changes.md`；有未提交改动时
 增加 `--include-worktree` 并确认。
 
