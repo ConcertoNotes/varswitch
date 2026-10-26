@@ -1,774 +1,3652 @@
 {
-  "source": "https://code.strova.top/pricing",
-  "api": "https://code.strova.top/api/pricing",
-  "date": "2026-10-25",
-  "sourceVersion": "a42d372ccf0b5dd13ecf71203521f9d2",
+  "source": "https://models.dev",
+  "api": "https://models.dev/api.json",
+  "license": "MIT",
+  "date": "2026-10-26",
+  "sourceSha256": "e8819dc5eceb8dfeea7212725b1f1dc933ec34e74b661100f830c8979283a159",
   "currency": "USD",
   "unit": "perMillionTokens",
+  "providers": [
+    "anthropic",
+    "openai",
+    "google",
+    "xai",
+    "deepseek",
+    "moonshotai",
+    "zhipuai",
+    "minimax",
+    "mistral",
+    "alibaba",
+    "stepfun",
+    "xiaomi",
+    "volcengine",
+    "cohere"
+  ],
   "notes": [
-    "Reference prices from the public pricing page; no provider group multiplier, account discount, tax or historical price adjustment is applied.",
-    "billingExpr takes precedence over legacy model_ratio and quota_type fields. Expression coefficients are USD per million tokens; omitted expression terms are zero.",
-    "For ratio pricing, input = model_ratio * 2 and output = input * completion_ratio. Missing cache ratios are null (unpublished), not zero or an inferred default.",
-    "inputLength is fresh input + cache read + all cache creation tokens. freshInput excludes cached input. inclusive=true selects rates at values <= threshold; false selects rates at values < threshold; otherwise use alternate.",
-    "shanghaiPeak selects alternate on Monday-Friday, 09:00 <= local time < 12:00 or 14:00 <= local time < 18:00, in Asia/Shanghai (UTC+08:00). Use rates at other times.",
-    "cacheCreation excludes tokens billed as cacheCreation1h. perRequest is a fixed USD charge for one request, not a per-million-token price.",
-    "Unusual source values are preserved, including gpt-6-luna input/output 75/150 and gpt-5.6-luna long-context output 1.800003; these are reference site prices, not claims of official model pricing."
+    "Prices are models.dev first-party provider list prices in USD per million tokens; no reseller multiplier, account discount, tax or historical price change is applied.",
+    "input is fresh input only; cacheRead and cacheCreation are billed separately. Missing cache prices are null (unknown), never zero.",
+    "models.dev does not list 1-hour cache writes; for anthropic entries cacheCreation1h = 2 x input, per Anthropic pricing. Other providers keep null.",
+    "tiers come from cost.tiers with tier.type = context: a request whose prompt (fresh input + cache read + cache write) is greater than above uses that tier. The highest exceeded tier wins.",
+    "Not applied: reasoning (thinking tokens are billed as output), audio prices, fast/priority modes, regional surcharges."
   ],
   "models": [
     {
       "model": "claude-fable-5",
+      "provider": "anthropic",
       "rates": {
-        "input": 10.0,
-        "output": 50.0,
-        "cacheRead": 1.0,
+        "input": 10,
+        "output": 50,
+        "cacheRead": 1,
         "cacheCreation": 12.5,
-        "cacheCreation1h": 20.0
-      },
-      "billingExpr": "tier(\"base\", p * 10 + c * 50 + cr * 1 + cc * 12.5 + cc1h * 20)"
+        "cacheCreation1h": 20
+      }
     },
     {
       "model": "claude-fable-5-1",
+      "provider": "anthropic",
       "rates": {
-        "input": 10.0,
-        "output": 50.0,
+        "input": 10,
+        "output": 50,
         "cacheRead": 0.25,
         "cacheCreation": 12.5,
-        "cacheCreation1h": 20.0
-      },
-      "billingExpr": "tier(\"base\", p * 10 + c * 50 + cr * 0.25 + cc * 12.5 + cc1h * 20)"
+        "cacheCreation1h": 20
+      }
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "provider": "anthropic",
+      "rates": {
+        "input": 1,
+        "output": 5,
+        "cacheRead": 0.1,
+        "cacheCreation": 1.25,
+        "cacheCreation1h": 2
+      }
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "rates": {
+        "input": 1,
+        "output": 5,
+        "cacheRead": 0.1,
+        "cacheCreation": 1.25,
+        "cacheCreation1h": 2
+      }
     },
     {
       "model": "claude-haiku-5-5",
+      "provider": "anthropic",
       "rates": {
         "input": 0.1,
-        "output": 0.05,
+        "output": 0.5,
         "cacheRead": 0.01,
         "cacheCreation": 0.125,
         "cacheCreation1h": 0.2
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 100000,
-        "inclusive": true
-      },
-      "alternate": {
-        "input": 0.5,
-        "output": 2.5,
-        "cacheRead": 0.05,
-        "cacheCreation": 0.625,
-        "cacheCreation1h": 1.0
-      },
-      "billingExpr": "((len <= 100000)) ? (tier(\"base\", p * 0.1 + c * 0.05 + cr * 0.01 + cc * 0.125 + cc1h * 0.2)) : (tier(\"长上下文\", p * 0.5 + c * 2.5 + cr * 0.05 + cc * 0.625 + cc1h * 1))"
+      "tiers": [
+        {
+          "above": 100000,
+          "rates": {
+            "input": 0.5,
+            "output": 2.5,
+            "cacheRead": 0.05,
+            "cacheCreation": 0.625,
+            "cacheCreation1h": 1
+          }
+        }
+      ]
+    },
+    {
+      "model": "claude-opus-4-5",
+      "provider": "anthropic",
+      "rates": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheCreation": 6.25,
+        "cacheCreation1h": 10
+      }
+    },
+    {
+      "model": "claude-opus-4-5-20251101",
+      "provider": "anthropic",
+      "rates": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheCreation": 6.25,
+        "cacheCreation1h": 10
+      }
     },
     {
       "model": "claude-opus-4-6",
+      "provider": "anthropic",
       "rates": {
-        "input": 5.0,
-        "output": 25.0,
+        "input": 5,
+        "output": 25,
         "cacheRead": 0.5,
         "cacheCreation": 6.25,
-        "cacheCreation1h": 10.0
-      },
-      "billingExpr": "tier(\"base\", p * 5 + c * 25 + cr * 0.5 + cc * 6.25 + cc1h * 10)"
+        "cacheCreation1h": 10
+      }
     },
     {
       "model": "claude-opus-4-7",
+      "provider": "anthropic",
       "rates": {
-        "input": 5.0,
-        "output": 25.0,
+        "input": 5,
+        "output": 25,
         "cacheRead": 0.5,
         "cacheCreation": 6.25,
-        "cacheCreation1h": 10.0
-      },
-      "billingExpr": "tier(\"base\", p * 5 + c * 25 + cr * 0.5 + cc * 6.25 + cc1h * 10)"
+        "cacheCreation1h": 10
+      }
     },
     {
       "model": "claude-opus-4-8",
+      "provider": "anthropic",
       "rates": {
-        "input": 5.0,
-        "output": 25.0,
+        "input": 5,
+        "output": 25,
         "cacheRead": 0.5,
         "cacheCreation": 6.25,
-        "cacheCreation1h": 10.0
-      },
-      "billingExpr": "tier(\"base\", p * 5 + c * 25 + cr * 0.5 + cc * 6.25 + cc1h * 10)"
+        "cacheCreation1h": 10
+      }
     },
     {
       "model": "claude-opus-5",
+      "provider": "anthropic",
       "rates": {
-        "input": 5.0,
-        "output": 25.0,
+        "input": 5,
+        "output": 25,
         "cacheRead": 0.5,
         "cacheCreation": 6.25,
-        "cacheCreation1h": 10.0
-      },
-      "billingExpr": "tier(\"base\", p * 5 + c * 25 + cr * 0.5 + cc * 6.25 + cc1h * 10)"
+        "cacheCreation1h": 10
+      }
     },
     {
       "model": "claude-opus-5-5",
+      "provider": "anthropic",
       "rates": {
-        "input": 4.0,
-        "output": 20.0,
+        "input": 4,
+        "output": 20,
         "cacheRead": 0.2,
-        "cacheCreation": 5.0,
-        "cacheCreation1h": 8.0
-      },
-      "billingExpr": "tier(\"base\", p * 4 + c * 20 + cr * 0.2 + cc * 5 + cc1h * 8)"
+        "cacheCreation": 5,
+        "cacheCreation1h": 8
+      }
     },
     {
       "model": "claude-sonnet-4-5",
+      "provider": "anthropic",
       "rates": {
-        "input": 3.0,
-        "output": 15.0,
+        "input": 3,
+        "output": 15,
         "cacheRead": 0.3,
         "cacheCreation": 3.75,
-        "cacheCreation1h": 6.0
-      },
-      "billingExpr": "tier(\"base\", p * 3 + c * 15 + cr * 0.3 + cc * 3.75 + cc1h * 6)"
+        "cacheCreation1h": 6
+      }
+    },
+    {
+      "model": "claude-sonnet-4-5-20250929",
+      "provider": "anthropic",
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3,
+        "cacheCreation": 3.75,
+        "cacheCreation1h": 6
+      }
     },
     {
       "model": "claude-sonnet-4-6",
+      "provider": "anthropic",
       "rates": {
-        "input": 3.0,
-        "output": 15.0,
+        "input": 3,
+        "output": 15,
         "cacheRead": 0.3,
         "cacheCreation": 3.75,
-        "cacheCreation1h": 6.0
-      },
-      "billingExpr": "tier(\"base\", p * 3 + c * 15 + cr * 0.3 + cc * 3.75 + cc1h * 6)"
+        "cacheCreation1h": 6
+      }
     },
     {
       "model": "claude-sonnet-5",
+      "provider": "anthropic",
       "rates": {
-        "input": 2.0,
-        "output": 10.0,
+        "input": 2,
+        "output": 10,
         "cacheRead": 0.2,
         "cacheCreation": 2.5,
-        "cacheCreation1h": 4.0
-      },
-      "billingExpr": "tier(\"base\", p * 2 + c * 10 + cr * 0.2 + cc * 2.5 + cc1h * 4)"
+        "cacheCreation1h": 4
+      }
     },
     {
       "model": "claude-sonnet-5-5",
+      "provider": "anthropic",
       "rates": {
-        "input": 2.0,
-        "output": 10.0,
-        "cacheRead": 0.2,
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
         "cacheCreation": 2.5,
-        "cacheCreation1h": 4.0
-      },
-      "billingExpr": "tier(\"base\", p * 2 + c * 10 + cr * 0.2 + cc * 2.5 + cc1h * 4)"
-    },
-    {
-      "model": "deepseek-v4-flash",
-      "rates": {
-        "input": 1.5,
-        "output": 4.5,
-        "cacheRead": 0.05,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "condition": {
-        "kind": "shanghaiPeak"
-      },
-      "alternate": {
-        "input": 3.0,
-        "output": 9.0,
-        "cacheRead": 0.1,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "((((weekday(\"Asia/Shanghai\") >= 1)) && ((weekday(\"Asia/Shanghai\") <= 5)) && ((((((hour(\"Asia/Shanghai\") >= 9)) && ((hour(\"Asia/Shanghai\") < 12)))) || ((((hour(\"Asia/Shanghai\") >= 14)) && ((hour(\"Asia/Shanghai\") < 18)))))))) ? (tier(\"高峰时段\", p * 3 + c * 9 + cr * 0.1)) : (tier(\"基础时段\", p * 1.5 + c * 4.5 + cr * 0.05))"
-    },
-    {
-      "model": "deepseek-v4-pro",
-      "rates": {
-        "input": 4.5,
-        "output": 13.5,
-        "cacheRead": 0.15,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "condition": {
-        "kind": "shanghaiPeak"
-      },
-      "alternate": {
-        "input": 9.0,
-        "output": 27.0,
-        "cacheRead": 0.3,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "((((weekday(\"Asia/Shanghai\") >= 1)) && ((weekday(\"Asia/Shanghai\") <= 5)) && ((((((hour(\"Asia/Shanghai\") >= 9)) && ((hour(\"Asia/Shanghai\") < 12)))) || ((((hour(\"Asia/Shanghai\") >= 14)) && ((hour(\"Asia/Shanghai\") < 18)))))))) ? (tier(\"高峰时段\", p * 9 + c * 27 + cr * 0.3)) : (tier(\"基础时段\", p * 4.5 + c * 13.5 + cr * 0.15))"
-    },
-    {
-      "model": "deepseek-v4.1-flash",
-      "rates": {
-        "input": 1.0,
-        "output": 4.0,
-        "cacheRead": 0.02,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "condition": {
-        "kind": "shanghaiPeak"
-      },
-      "alternate": {
-        "input": 2.0,
-        "output": 8.0,
-        "cacheRead": 0.04,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "(((weekday(\"Asia/Shanghai\") >= 1)) && ((weekday(\"Asia/Shanghai\") <= 5)) && ((((((hour(\"Asia/Shanghai\") >= 9)) && ((hour(\"Asia/Shanghai\") < 12)))) || ((((hour(\"Asia/Shanghai\") >= 14)) && ((hour(\"Asia/Shanghai\") < 18))))))) ? (tier(\"高峰时段\", p * 2 + c * 8 + cr * 0.04)) : (tier(\"基础时段\", p * 1 + c * 4 + cr * 0.02))"
-    },
-    {
-      "model": "deepseek-v4.1-flash-1017",
-      "rates": {
-        "input": 1.0,
-        "output": 4.0,
-        "cacheRead": 0.02,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "condition": {
-        "kind": "shanghaiPeak"
-      },
-      "alternate": {
-        "input": 2.0,
-        "output": 8.0,
-        "cacheRead": 0.04,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "((((weekday(\"Asia/Shanghai\") >= 1))) && (((weekday(\"Asia/Shanghai\") <= 5))) && ((((((hour(\"Asia/Shanghai\") >= 9)) && ((hour(\"Asia/Shanghai\") < 12)))) || ((((hour(\"Asia/Shanghai\") >= 14)) && ((hour(\"Asia/Shanghai\") < 18))))))) ? (tier(\"高峰时段\", p * 2 + c * 8 + cr * 0.04)) : (tier(\"基础时段\", p * 1 + c * 4 + cr * 0.02))"
-    },
-    {
-      "model": "gemini-3.5-flash",
-      "rates": {
-        "input": 1.5,
-        "output": 9.0,
-        "cacheRead": 0.15,
-        "cacheCreation": null,
-        "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 0.75,
-        "completion_ratio": 6.0,
-        "cache_ratio": 0.1
+        "cacheCreation1h": 4
       }
     },
     {
-      "model": "gemini-3.6-flash",
+      "model": "gpt-3.5-turbo",
+      "provider": "openai",
       "rates": {
-        "input": 0.75,
-        "output": 3.75,
-        "cacheRead": 0.075,
-        "cacheCreation": null,
-        "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 0.375,
-        "completion_ratio": 5.0,
-        "cache_ratio": 0.1
-      }
-    },
-    {
-      "model": "gemini-3.7-flash",
-      "rates": {
-        "input": 0.75,
-        "output": 3.75,
-        "cacheRead": 0.075,
-        "cacheCreation": null,
-        "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 0.375,
-        "completion_ratio": 5.0,
-        "cache_ratio": 0.1
-      }
-    },
-    {
-      "model": "gemini-3.8-flash",
-      "rates": {
-        "input": 0.75,
-        "output": 3.75,
-        "cacheRead": 0.075,
-        "cacheCreation": 0.0417,
-        "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 0.375,
-        "completion_ratio": 5.0,
-        "cache_ratio": 0.1,
-        "create_cache_ratio": 0.0556
-      }
-    },
-    {
-      "model": "gemini-4-argon",
-      "rates": {
-        "input": 2.0,
-        "output": 10.0,
-        "cacheRead": 0.1,
-        "cacheCreation": 0.1875,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "tier(\"base\", p * 2 + c * 10 + cr * 0.1 + cc * 0.1875)"
-    },
-    {
-      "model": "gemini-4-argon-percall",
-      "rates": {
-        "input": 0,
-        "output": 0,
+        "input": 0.5,
+        "output": 1.5,
         "cacheRead": 0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "perRequest": 0.2,
-      "billingExpr": "tier(\"base\", fixed(0.2))"
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "glm-5.1",
+      "model": "gpt-4",
+      "provider": "openai",
       "rates": {
-        "input": 75.0,
-        "output": 75.0,
+        "input": 30,
+        "output": 60,
         "cacheRead": null,
         "cacheCreation": null,
         "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 37.5,
-        "completion_ratio": 1.0
       }
     },
     {
-      "model": "glm-5.2",
+      "model": "gpt-4-turbo",
+      "provider": "openai",
       "rates": {
-        "input": 8.0,
-        "output": 28.0,
-        "cacheRead": 2.0,
+        "input": 10,
+        "output": 30,
+        "cacheRead": null,
         "cacheCreation": null,
         "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 4.0,
-        "completion_ratio": 3.5,
-        "cache_ratio": 0.25
       }
     },
     {
-      "model": "glm-5.3",
+      "model": "gpt-4.1",
+      "provider": "openai",
       "rates": {
-        "input": 8.0,
-        "output": 28.0,
-        "cacheRead": 2.0,
+        "input": 2,
+        "output": 8,
+        "cacheRead": 0.5,
         "cacheCreation": null,
         "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 4.0,
-        "completion_ratio": 3.5,
-        "cache_ratio": 0.25
       }
     },
     {
-      "model": "glm-5.3-flash",
+      "model": "gpt-4.1-mini",
+      "provider": "openai",
       "rates": {
-        "input": 0.8,
-        "output": 2.8,
-        "cacheRead": 0.23,
+        "input": 0.4,
+        "output": 1.6,
+        "cacheRead": 0.1,
         "cacheCreation": null,
         "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 0.4,
-        "completion_ratio": 3.5,
-        "cache_ratio": 0.2875
+      }
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "provider": "openai",
+      "rates": {
+        "input": 0.1,
+        "output": 0.4,
+        "cacheRead": 0.025,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-4o",
+      "provider": "openai",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": 1.25,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-4o-2024-05-13",
+      "provider": "openai",
+      "rates": {
+        "input": 5,
+        "output": 15,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-4o-2024-08-06",
+      "provider": "openai",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": 1.25,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-4o-2024-11-20",
+      "provider": "openai",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": 1.25,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-4o-mini",
+      "provider": "openai",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5",
+      "provider": "openai",
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheRead": 0.125,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5-mini",
+      "provider": "openai",
+      "rates": {
+        "input": 0.25,
+        "output": 2,
+        "cacheRead": 0.025,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5-nano",
+      "provider": "openai",
+      "rates": {
+        "input": 0.05,
+        "output": 0.4,
+        "cacheRead": 0.005,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5-pro",
+      "provider": "openai",
+      "rates": {
+        "input": 15,
+        "output": 120,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5.1",
+      "provider": "openai",
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheRead": 0.125,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5.2",
+      "provider": "openai",
+      "rates": {
+        "input": 1.75,
+        "output": 14,
+        "cacheRead": 0.175,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5.2-pro",
+      "provider": "openai",
+      "rates": {
+        "input": 21,
+        "output": 168,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5.3-codex",
+      "provider": "openai",
+      "rates": {
+        "input": 1.75,
+        "output": 14,
+        "cacheRead": 0.175,
+        "cacheCreation": null,
+        "cacheCreation1h": null
       }
     },
     {
       "model": "gpt-5.3-codex-spark",
+      "provider": "openai",
       "rates": {
-        "input": 75.0,
-        "output": 450.0,
-        "cacheRead": null,
+        "input": 1.75,
+        "output": 14,
+        "cacheRead": 0.175,
         "cacheCreation": null,
         "cacheCreation1h": null
-      },
-      "sourceRatios": {
-        "model_ratio": 37.5,
-        "completion_ratio": 6.0
       }
     },
     {
       "model": "gpt-5.4",
+      "provider": "openai",
       "rates": {
         "input": 2.5,
-        "output": 15.0,
+        "output": 15,
         "cacheRead": 0.25,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 272000,
-        "inclusive": true
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 5,
+            "output": 22.5,
+            "cacheRead": 0.5,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "provider": "openai",
+      "rates": {
+        "input": 0.75,
+        "output": 4.5,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5.4-nano",
+      "provider": "openai",
+      "rates": {
+        "input": 0.2,
+        "output": 1.25,
+        "cacheRead": 0.02,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-5.4-pro",
+      "provider": "openai",
+      "rates": {
+        "input": 30,
+        "output": 180,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "alternate": {
-        "input": 5.0,
-        "output": 22.5,
-        "cacheRead": 0.5,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len <= 272000 ? tier(\"standard\", p * 2.5 + c * 15 + cr * 0.25) : tier(\"long_context\", p * 5 + c * 22.5 + cr * 0.5)"
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 60,
+            "output": 270,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "gpt-5.5",
+      "provider": "openai",
       "rates": {
-        "input": 5.0,
-        "output": 30.0,
+        "input": 5,
+        "output": 30,
         "cacheRead": 0.5,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 272000,
-        "inclusive": true
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 10,
+            "output": 45,
+            "cacheRead": 1,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.5-pro",
+      "provider": "openai",
+      "rates": {
+        "input": 30,
+        "output": 180,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "alternate": {
-        "input": 10.0,
-        "output": 45.0,
-        "cacheRead": 1.0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 60,
+            "output": 270,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6",
+      "provider": "openai",
+      "rates": {
+        "input": 4,
+        "output": 20,
+        "cacheRead": 0.4,
+        "cacheCreation": 5,
+        "cacheCreation1h": null
       },
-      "billingExpr": "len <= 272000 ? tier(\"standard\", p * 5 + c * 30 + cr * 0.5) : tier(\"long_context\", p * 10 + c * 45 + cr * 1)"
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 8,
+            "output": 30,
+            "cacheRead": 0.8,
+            "cacheCreation": 10,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "gpt-5.6-luna",
+      "provider": "openai",
       "rates": {
         "input": 0.2,
         "output": 1.2,
         "cacheRead": 0.02,
         "cacheCreation": 0.25,
-        "cacheCreation1h": 0
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 272000,
-        "inclusive": true
-      },
-      "alternate": {
-        "input": 0.4,
-        "output": 1.800003,
-        "cacheRead": 0.04,
-        "cacheCreation": 0.5,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len <= 272000 ? tier(\"standard\", p * 0.2 + c * 1.2 + cr * 0.02 + cc * 0.25) : tier(\"long_context\", p * 0.4 + c * 1.800003 + cr * 0.04 + cc * 0.5)"
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 0.4,
+            "output": 1.8,
+            "cacheRead": 0.04,
+            "cacheCreation": 0.5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "gpt-5.6-sol",
+      "provider": "openai",
       "rates": {
-        "input": 5.0,
-        "output": 30.0,
-        "cacheRead": 0.5,
-        "cacheCreation": 6.25,
-        "cacheCreation1h": 0
+        "input": 4,
+        "output": 20,
+        "cacheRead": 0.4,
+        "cacheCreation": 5,
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 272000,
-        "inclusive": false
-      },
-      "alternate": {
-        "input": 10.0,
-        "output": 45.0,
-        "cacheRead": 1.0,
-        "cacheCreation": 12.5,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len < 272000 ? tier(\"基础长度\", p * 5 + c * 30 + cr * 0.5 + cc * 6.25) : tier(\"长上下文\", p * 10 + c * 45 + cr * 1 + cc * 12.5)"
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 8,
+            "output": 30,
+            "cacheRead": 0.8,
+            "cacheCreation": 10,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "gpt-5.6-terra",
+      "provider": "openai",
       "rates": {
-        "input": 2.0,
-        "output": 12.0,
+        "input": 2,
+        "output": 12,
         "cacheRead": 0.2,
         "cacheCreation": 2.5,
-        "cacheCreation1h": 0
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 200000,
-        "inclusive": false
-      },
-      "alternate": {
-        "input": 4.0,
-        "output": 18.0,
-        "cacheRead": 0.4,
-        "cacheCreation": 5.0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len < 200000 ? tier(\"base\", p * 2 + c * 12 + cr * 0.2 + cc * 2.5) : tier(\"tier_2\", p * 4 + c * 18 + cr * 0.4 + cc * 5)"
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheCreation": 5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "gpt-6-astra",
+      "provider": "openai",
       "rates": {
-        "input": 10.0,
-        "output": 50.0,
-        "cacheRead": 1.0,
+        "input": 10,
+        "output": 50,
+        "cacheRead": 1,
         "cacheCreation": 12.5,
-        "cacheCreation1h": 0
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 272000,
-        "inclusive": true
-      },
-      "alternate": {
-        "input": 20.0,
-        "output": 75.0,
-        "cacheRead": 2.0,
-        "cacheCreation": 25.0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len <= 272000 ? tier(\"base\", p * 10 + c * 50 + cr * 1 + cc * 12.5) : tier(\"tier_2\", p * 20 + c * 75 + cr * 2 + cc * 25)"
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 20,
+            "output": 75,
+            "cacheRead": 2,
+            "cacheCreation": 25,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "gpt-6-luna",
+      "provider": "openai",
       "rates": {
-        "input": 75.0,
-        "output": 150.0,
+        "input": 0.1,
+        "output": 0.5,
+        "cacheRead": 0.01,
+        "cacheCreation": 0.125,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 0.2,
+            "output": 0.75,
+            "cacheRead": 0.02,
+            "cacheCreation": 0.25,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-6-sol",
+      "provider": "openai",
+      "rates": {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.2,
+        "cacheCreation": 2.5,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 4,
+            "output": 15,
+            "cacheRead": 0.4,
+            "cacheCreation": 5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "provider": "openai",
+      "rates": {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheCreation": 2.5,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 4,
+            "output": 15,
+            "cacheRead": 0.2,
+            "cacheCreation": 5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-daybreak-blue-latest",
+      "provider": "openai",
+      "rates": {
+        "input": 4,
+        "output": 20,
+        "cacheRead": 0.4,
+        "cacheCreation": 5,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 272000,
+          "rates": {
+            "input": 8,
+            "output": 30,
+            "cacheRead": 0.8,
+            "cacheCreation": 10,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-daybreak-red-latest",
+      "provider": "openai",
+      "rates": {
+        "input": 12.5,
+        "output": 75,
+        "cacheRead": 1.25,
+        "cacheCreation": 15.625,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-image-2",
+      "provider": "openai",
+      "rates": {
+        "input": 5,
+        "output": 30,
+        "cacheRead": 1.25,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gpt-realtime-2.1",
+      "provider": "openai",
+      "rates": {
+        "input": 4,
+        "output": 24,
+        "cacheRead": 0.4,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "o1",
+      "provider": "openai",
+      "rates": {
+        "input": 15,
+        "output": 60,
+        "cacheRead": 7.5,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "o1-pro",
+      "provider": "openai",
+      "rates": {
+        "input": 150,
+        "output": 600,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "o3",
+      "provider": "openai",
+      "rates": {
+        "input": 2,
+        "output": 8,
+        "cacheRead": 0.5,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "o3-mini",
+      "provider": "openai",
+      "rates": {
+        "input": 1.1,
+        "output": 4.4,
+        "cacheRead": 0.55,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "o3-pro",
+      "provider": "openai",
+      "rates": {
+        "input": 20,
+        "output": 80,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "o4-mini",
+      "provider": "openai",
+      "rates": {
+        "input": 1.1,
+        "output": 4.4,
+        "cacheRead": 0.275,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "text-embedding-3-large",
+      "provider": "openai",
+      "rates": {
+        "input": 0.13,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "text-embedding-3-small",
+      "provider": "openai",
+      "rates": {
+        "input": 0.02,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "text-embedding-ada-002",
+      "provider": "openai",
+      "rates": {
+        "input": 0.1,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "deep-research-max-preview-04-2026",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "deep-research-preview-04-2026",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gemini-2.5-computer-use-preview-10-2025",
+      "provider": "google",
+      "rates": {
+        "input": 1.25,
+        "output": 10,
         "cacheRead": null,
         "cacheCreation": null,
         "cacheCreation1h": null
       },
-      "sourceRatios": {
-        "model_ratio": 37.5,
-        "completion_ratio": 2.0
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2.5,
+            "output": 15,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "provider": "google",
+      "rates": {
+        "input": 0.3,
+        "output": 2.5,
+        "cacheRead": 0.03,
+        "cacheCreation": null,
+        "cacheCreation1h": null
       }
     },
     {
-      "model": "gpt-6-sol",
+      "model": "gemini-2.5-flash-image",
+      "provider": "google",
       "rates": {
-        "input": 2.0,
-        "output": 10.0,
-        "cacheRead": 0.2,
-        "cacheCreation": 2.5,
-        "cacheCreation1h": 0
-      },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 200000,
-        "inclusive": false
-      },
-      "alternate": {
-        "input": 4.0,
-        "output": 15.0,
-        "cacheRead": 0.4,
-        "cacheCreation": 5.0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len < 200000 ? tier(\"base\", p * 2 + c * 10 + cr * 0.2 + cc * 2.5) : tier(\"长文本\", p * 4 + c * 15 + cr * 0.4 + cc * 5)"
+        "input": 0.3,
+        "output": 30,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "gpt-6.1-sol",
+      "model": "gemini-2.5-flash-lite",
+      "provider": "google",
       "rates": {
-        "input": 2.0,
-        "output": 10.0,
+        "input": 0.1,
+        "output": 0.4,
+        "cacheRead": 0.01,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-2.5-flash-preview-tts",
+      "provider": "google",
+      "rates": {
+        "input": 0.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "provider": "google",
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheRead": 0.125,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2.5,
+            "output": 15,
+            "cacheRead": 0.25,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gemini-2.5-pro-preview-tts",
+      "provider": "google",
+      "rates": {
+        "input": 1,
+        "output": 20,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3-flash-preview",
+      "provider": "google",
+      "rates": {
+        "input": 0.5,
+        "output": 3,
+        "cacheRead": 0.05,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3-pro-image",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 120,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3-pro-image-preview",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 120,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-image",
+      "provider": "google",
+      "rates": {
+        "input": 0.5,
+        "output": 60,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-image-preview",
+      "provider": "google",
+      "rates": {
+        "input": 0.5,
+        "output": 60,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "provider": "google",
+      "rates": {
+        "input": 0.25,
+        "output": 1.5,
+        "cacheRead": 0.025,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-lite-image",
+      "provider": "google",
+      "rates": {
+        "input": 0.25,
+        "output": 30,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-lite-preview",
+      "provider": "google",
+      "rates": {
+        "input": 0.25,
+        "output": 1.5,
+        "cacheRead": 0.025,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-live-preview",
+      "provider": "google",
+      "rates": {
+        "input": 0.75,
+        "output": 4.5,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-flash-tts-preview",
+      "provider": "google",
+      "rates": {
+        "input": 1,
+        "output": 20,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gemini-3.1-pro-preview-customtools",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 12,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "provider": "google",
+      "rates": {
+        "input": 1.5,
+        "output": 9,
+        "cacheRead": 0.15,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "provider": "google",
+      "rates": {
+        "input": 0.3,
+        "output": 2.5,
+        "cacheRead": 0.03,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.5-live-translate-preview",
+      "provider": "google",
+      "rates": {
+        "input": 3.5,
+        "output": 21,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "provider": "google",
+      "rates": {
+        "input": 0.75,
+        "output": 3.75,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "provider": "google",
+      "rates": {
+        "input": 0.75,
+        "output": 3.75,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "provider": "google",
+      "rates": {
+        "input": 0.75,
+        "output": 3.75,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-4-argon",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 10,
         "cacheRead": 0.1,
-        "cacheCreation": 2.5,
-        "cacheCreation1h": 0
-      },
-      "condition": {
-        "kind": "freshInput",
-        "threshold": 272000,
-        "inclusive": false
-      },
-      "alternate": {
-        "input": 4.0,
-        "output": 15.0,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-embedding-001",
+      "provider": "google",
+      "rates": {
+        "input": 0.15,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-embedding-2",
+      "provider": "google",
+      "rates": {
+        "input": 0.2,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-flash-latest",
+      "provider": "google",
+      "rates": {
+        "input": 0.75,
+        "output": 3.75,
+        "cacheRead": 0.075,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-flash-lite-latest",
+      "provider": "google",
+      "rates": {
+        "input": 0.3,
+        "output": 2.5,
+        "cacheRead": 0.03,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-omni-flash-preview",
+      "provider": "google",
+      "rates": {
+        "input": 1.5,
+        "output": 17.5,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "gemini-pro-latest",
+      "provider": "google",
+      "rates": {
+        "input": 2,
+        "output": 12,
         "cacheRead": 0.2,
-        "cacheCreation": 5.0,
-        "cacheCreation1h": 0
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "billingExpr": "((p < 272000)) ? (tier(\"base\", p * 2 + c * 10 + cr * 0.1 + cc * 2.5)) : (tier(\"base\", p * 4 + c * 15 + cr * 0.2 + cc * 5))"
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 18,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
-      "model": "gpt-image-2",
+      "model": "lyria-3-clip-preview",
+      "provider": "google",
       "rates": {
         "input": 0,
         "output": 0,
-        "cacheRead": 0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "perRequest": 0.08,
-      "billingExpr": "tier(\"base\", fixed(0.08))"
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "gpt-image-2.5",
+      "model": "lyria-3-pro-preview",
+      "provider": "google",
       "rates": {
         "input": 0,
         "output": 0,
-        "cacheRead": 0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "grok-4.20-0309-non-reasoning",
+      "provider": "xai",
+      "rates": {
+        "input": 1.25,
+        "output": 2.5,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "perRequest": 0.08,
-      "billingExpr": "tier(\"base\", fixed(0.08))"
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2.5,
+            "output": 5,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "grok-4.20-0309-reasoning",
+      "provider": "xai",
+      "rates": {
+        "input": 1.25,
+        "output": 2.5,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2.5,
+            "output": 5,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "grok-4.20-multi-agent-0309",
+      "provider": "xai",
+      "rates": {
+        "input": 1.25,
+        "output": 2.5,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2.5,
+            "output": 5,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "grok-4.3",
+      "provider": "xai",
+      "rates": {
+        "input": 1.25,
+        "output": 2.5,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2.5,
+            "output": 5,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "grok-4.5",
+      "provider": "xai",
       "rates": {
-        "input": 2.0,
-        "output": 6.0,
+        "input": 2,
+        "output": 6,
         "cacheRead": 0.3,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 200000,
-        "inclusive": true
-      },
-      "alternate": {
-        "input": 4.0,
-        "output": 12.0,
-        "cacheRead": 0.6,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len <= 200000 ? tier(\"standard\", p * 2 + c * 6 + cr * 0.3) : tier(\"long_context\", p * 4 + c * 12 + cr * 0.6)"
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 12,
+            "cacheRead": 0.6,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "grok-4.6",
+      "provider": "xai",
       "rates": {
-        "input": 2.0,
-        "output": 6.0,
+        "input": 2,
+        "output": 6,
         "cacheRead": 0.5,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 200000,
-        "inclusive": false
-      },
-      "alternate": {
-        "input": 4.0,
-        "output": 12.0,
-        "cacheRead": 1.0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len < 200000 ? tier(\"base\", p * 2 + c * 6 + cr * 0.5) : tier(\"tier_2\", p * 4 + c * 12 + cr * 1)"
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 12,
+            "cacheRead": 1,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
     },
     {
       "model": "grok-4.7",
+      "provider": "xai",
       "rates": {
-        "input": 2.0,
-        "output": 6.0,
+        "input": 2,
+        "output": 6,
         "cacheRead": 0.5,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "condition": {
-        "kind": "inputLength",
-        "threshold": 200000,
-        "inclusive": false
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 4,
+            "output": 12,
+            "cacheRead": 1,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "grok-build-0.1",
+      "provider": "xai",
+      "rates": {
+        "input": 1,
+        "output": 2,
+        "cacheRead": 0.2,
+        "cacheCreation": null,
+        "cacheCreation1h": null
       },
-      "alternate": {
-        "input": 4.0,
-        "output": 12.0,
-        "cacheRead": 1.0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "len < 200000 ? tier(\"base\", p * 2 + c * 6 + cr * 0.5) : tier(\"tier_2\", p * 4 + c * 12 + cr * 1)"
+      "tiers": [
+        {
+          "above": 200000,
+          "rates": {
+            "input": 2,
+            "output": 4,
+            "cacheRead": 0.4,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "deepseek-flash",
+      "provider": "deepseek",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.003,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.003,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "deepseek-v4-flash-vision-exp",
+      "provider": "deepseek",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.003,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "rates": {
+        "input": 0.66,
+        "output": 1.98,
+        "cacheRead": 0.022,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "kimi-k2.6",
+      "provider": "moonshotai",
+      "rates": {
+        "input": 0.95,
+        "output": 4,
+        "cacheRead": 0.16,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "kimi-k2.7-code",
+      "provider": "moonshotai",
+      "rates": {
+        "input": 0.95,
+        "output": 4,
+        "cacheRead": 0.19,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "kimi-k2.7-code-highspeed",
+      "provider": "moonshotai",
+      "rates": {
+        "input": 1.9,
+        "output": 8,
+        "cacheRead": 0.38,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
       "model": "kimi-k3",
+      "provider": "moonshotai",
       "rates": {
-        "input": 20.0,
-        "output": 100.0,
-        "cacheRead": 2.0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "tier(\"base\", p * 20 + c * 100 + cr * 2)"
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3,
+        "cacheCreation": 3,
+        "cacheCreation1h": null
+      }
     },
     {
       "model": "kimi-k3.1-pro",
+      "provider": "moonshotai",
       "rates": {
-        "input": 13.0,
-        "output": 68.0,
-        "cacheRead": 1.3,
-        "cacheCreation": 13.0,
-        "cacheCreation1h": 26.0
-      },
-      "billingExpr": "tier(\"base\", p * 13 + c * 68 + cr * 1.3 + cc * 13 + cc1h * 26)"
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.2,
+        "cacheCreation": 2,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "minimax-m3",
+      "model": "kimi-k3.1-pro-highspeed",
+      "provider": "moonshotai",
+      "rates": {
+        "input": 4,
+        "output": 20,
+        "cacheRead": 0.2,
+        "cacheCreation": 4,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-4.5",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.6,
+        "output": 2.2,
+        "cacheRead": 0.11,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-4.5-air",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.11952,
+        "output": 0.89637,
+        "cacheRead": 0.0239,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.17927,
+            "output": 1.19516,
+            "cacheRead": 0.03585,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-4.5-flash",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-4.5v",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.29879,
+        "output": 0.89637,
+        "cacheRead": 0.05976,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.59758,
+            "output": 1.79274,
+            "cacheRead": 0.11952,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-4.6",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.6,
+        "output": 2.2,
+        "cacheRead": 0.11,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-4.6v",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.1494,
+        "output": 0.44819,
+        "cacheRead": 0.02988,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.29879,
+            "output": 0.89637,
+            "cacheRead": 0.05976,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-4.6v-flash",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-4.7",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.44819,
+        "output": 2.09153,
+        "cacheRead": 0.08964,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.59758,
+            "output": 2.39032,
+            "cacheRead": 0.11952,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-4.7-flash",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-4.7-flashx",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.0747,
+        "output": 0.44819,
+        "cacheRead": 0.01494,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-5",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.59758,
+        "output": 2.68911,
+        "cacheRead": 0.1494,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.89637,
+            "output": 3.28669,
+            "cacheRead": 0.22409,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-5.1",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.89637,
+        "output": 3.58548,
+        "cacheRead": 0.19421,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 1.19516,
+            "output": 4.18306,
+            "cacheRead": 0.29879,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-5.2",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 1.19516,
+        "output": 4.18306,
+        "cacheRead": 0.29879,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-5.3",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 1.19516,
+        "output": 4.18306,
+        "cacheRead": 0.29879,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-5.3-flash",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.11952,
+        "output": 0.41831,
+        "cacheRead": 0.03436,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-5.3-flashx",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.29879,
+        "output": 1.04577,
+        "cacheRead": 0.08516,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "glm-5v-turbo",
+      "provider": "zhipuai",
+      "rates": {
+        "input": 0.74698,
+        "output": 3.28669,
+        "cacheRead": 0.17927,
+        "cacheCreation": 0,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 1.04577,
+            "output": 3.88427,
+            "cacheRead": 0.26891,
+            "cacheCreation": 0,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "minimax-m2",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.3,
+        "output": 1.2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "minimax-m2.1",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.3,
+        "output": 1.2,
+        "cacheRead": 0.03,
+        "cacheCreation": 0.375,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "minimax-m2.5",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.3,
+        "output": 1.2,
+        "cacheRead": 0.03,
+        "cacheCreation": 0.375,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "minimax-m2.5-highspeed",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.6,
+        "output": 2.4,
+        "cacheRead": 0.03,
+        "cacheCreation": 0.375,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "minimax-m2.7",
+      "provider": "minimax",
       "rates": {
         "input": 0.3,
         "output": 1.2,
         "cacheRead": 0.06,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "tier(\"base\", p * 0.3 + c * 1.2 + cr * 0.06)"
+        "cacheCreation": 0.375,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "nano-banana-2",
+      "model": "minimax-m2.7-highspeed",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.6,
+        "output": 2.4,
+        "cacheRead": 0.06,
+        "cacheCreation": 0.375,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "minimax-m3",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.3,
+        "output": 1.2,
+        "cacheRead": 0.06,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 512000,
+          "rates": {
+            "input": 0.6,
+            "output": 2.4,
+            "cacheRead": 0.12,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "minimax-m3.1-flash",
+      "provider": "minimax",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.015,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "codestral-2508",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.3,
+        "output": 0.9,
+        "cacheRead": 0.03,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "codestral-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.3,
+        "output": 0.9,
+        "cacheRead": 0.03,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "devstral-2512",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.4,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "devstral-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.4,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "devstral-medium-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.4,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "labs-devstral-small-2512",
+      "provider": "mistral",
       "rates": {
         "input": 0,
         "output": 0,
-        "cacheRead": 0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "perRequest": 0.2,
-      "billingExpr": "tier(\"base\", fixed(0.2))"
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "nano-banana-2.1",
+      "model": "labs-leanstral-1-5-1",
+      "provider": "mistral",
       "rates": {
         "input": 0,
         "output": 0,
-        "cacheRead": 0,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "perRequest": 0.2,
-      "billingExpr": "tier(\"base\", fixed(0.2))"
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "red-1-lite",
+      "model": "magistral-medium-latest",
+      "provider": "mistral",
       "rates": {
-        "input": 1.4,
-        "output": 6.0,
-        "cacheRead": 0.7,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
-      },
-      "billingExpr": "tier(\"base\", p * 1.4 + c * 6 + cr * 0.7)"
+        "input": 2,
+        "output": 5,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     },
     {
-      "model": "red-1-sol",
+      "model": "ministral-14b-2512",
+      "provider": "mistral",
       "rates": {
-        "input": 8.0,
-        "output": 32.0,
-        "cacheRead": 1.4,
-        "cacheCreation": 0,
-        "cacheCreation1h": 0
+        "input": 0.2,
+        "output": 0.2,
+        "cacheRead": 0.02,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "ministral-3b-2512",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.1,
+        "output": 0.1,
+        "cacheRead": 0.01,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "ministral-3b-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.1,
+        "output": 0.1,
+        "cacheRead": 0.01,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "ministral-8b-2512",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.15,
+        "output": 0.15,
+        "cacheRead": 0.015,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "ministral-8b-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.15,
+        "output": 0.15,
+        "cacheRead": 0.015,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-embed",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.1,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-large-2512",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.5,
+        "output": 1.5,
+        "cacheRead": 0.05,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-large-4",
+      "provider": "mistral",
+      "rates": {
+        "input": 1.36,
+        "output": 4.18,
+        "cacheRead": 0.14,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-large-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.5,
+        "output": 1.5,
+        "cacheRead": 0.05,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-medium-2505",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.4,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-medium-2508",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.4,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-medium-2604",
+      "provider": "mistral",
+      "rates": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.15,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-medium-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.15,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-small-2506",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.1,
+        "output": 0.3,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-small-2603",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.015,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mistral-small-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.015,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "open-mistral-nemo",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.15,
+        "output": 0.15,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "pixtral-12b",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.15,
+        "output": 0.15,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "voxtral-small-2507",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.1,
+        "output": 0.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "voxtral-small-latest",
+      "provider": "mistral",
+      "rates": {
+        "input": 0.1,
+        "output": 0.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qvq-max",
+      "provider": "alibaba",
+      "rates": {
+        "input": 1.2,
+        "output": 4.8,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.05,
+        "output": 0.4,
+        "cacheRead": 0.01,
+        "cacheCreation": 0.0625,
+        "cacheCreation1h": null
       },
-      "billingExpr": "tier(\"base\", p * 8 + c * 32 + cr * 1.4)"
+      "tiers": [
+        {
+          "above": 256000,
+          "rates": {
+            "input": 0.25,
+            "output": 2,
+            "cacheRead": 0.05,
+            "cacheCreation": 0.3125,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen-max",
+      "provider": "alibaba",
+      "rates": {
+        "input": 1.6,
+        "output": 6.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-mt-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 2.46,
+        "output": 7.37,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-mt-turbo",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.16,
+        "output": 0.49,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-omni-turbo",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.07,
+        "output": 0.27,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-omni-turbo-realtime",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.27,
+        "output": 1.07,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.4,
+        "output": 1.2,
+        "cacheRead": 0.08,
+        "cacheCreation": 0.5,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 256000,
+          "rates": {
+            "input": 1.2,
+            "output": 3.6,
+            "cacheRead": 0.24,
+            "cacheCreation": 1.5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen-plus-character-ja",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.5,
+        "output": 1.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-turbo",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.05,
+        "output": 0.2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-vl-max",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.8,
+        "output": 3.2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-vl-ocr",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.07,
+        "output": 0.16,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen-vl-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.21,
+        "output": 0.63,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen2-5-omni-7b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.1,
+        "output": 0.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-14b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.35,
+        "output": 1.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-235b-a22b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.7,
+        "output": 2.8,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-32b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.7,
+        "output": 2.8,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-8b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.18,
+        "output": 0.7,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-coder-30b-a3b-instruct",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.45,
+        "output": 2.25,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.75,
+            "output": 3.75,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 1.2,
+            "output": 6,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3-coder-480b-a35b-instruct",
+      "provider": "alibaba",
+      "rates": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 2.7,
+            "output": 13.5,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 4.5,
+            "output": 22.5,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3-coder-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.3,
+        "output": 1.5,
+        "cacheRead": 0.06,
+        "cacheCreation": 0.375,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.5,
+            "output": 2.5,
+            "cacheRead": 0.1,
+            "cacheCreation": 0.625,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.8,
+            "output": 4,
+            "cacheRead": 0.16,
+            "cacheCreation": 1,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 256000,
+          "rates": {
+            "input": 1.6,
+            "output": 9.6,
+            "cacheRead": 0.32,
+            "cacheCreation": 2,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3-coder-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 1,
+        "output": 5,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-livetranslate-flash-realtime",
+      "provider": "alibaba",
+      "rates": {
+        "input": 10,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-max",
+      "provider": "alibaba",
+      "rates": {
+        "input": 1.2,
+        "output": 6,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-next-80b-a3b-instruct",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.5,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-next-80b-a3b-thinking",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.5,
+        "output": 6,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-omni-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.43,
+        "output": 1.66,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-omni-flash-realtime",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.52,
+        "output": 1.99,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-vl-235b-a22b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.7,
+        "output": 2.8,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-vl-30b-a3b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.2,
+        "output": 0.8,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3-vl-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.2,
+        "output": 1.6,
+        "cacheRead": 0.04,
+        "cacheCreation": 0.25,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.3,
+            "output": 2.4,
+            "cacheRead": 0.06,
+            "cacheCreation": 0.375,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.6,
+            "output": 4.8,
+            "cacheRead": 0.12,
+            "cacheCreation": 0.75,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3.5-122b-a10b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.4,
+        "output": 3.2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.5-27b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.3,
+        "output": 2.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.5-35b-a3b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.25,
+        "output": 2,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.5-397b-a17b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.6,
+        "output": 3.6,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.5-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.1,
+        "output": 0.4,
+        "cacheRead": 0.01,
+        "cacheCreation": 0.125,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.5-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.4,
+        "output": 2.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 256000,
+          "rates": {
+            "input": 0.5,
+            "output": 3,
+            "cacheRead": null,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3.6-27b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.6,
+        "output": 3.6,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.6-35b-a3b",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.375,
+        "output": 2.25,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.6-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.25,
+        "output": 1.5,
+        "cacheRead": 0.025,
+        "cacheCreation": 0.3125,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 256000,
+          "rates": {
+            "input": 1,
+            "output": 4,
+            "cacheRead": 0.1,
+            "cacheCreation": 1.25,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3.6-max-preview",
+      "provider": "alibaba",
+      "rates": {
+        "input": 1.3,
+        "output": 7.8,
+        "cacheRead": 0.13,
+        "cacheCreation": 1.625,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.6-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.5,
+        "output": 3,
+        "cacheRead": 0.05,
+        "cacheCreation": 0.625,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 256000,
+          "rates": {
+            "input": 2,
+            "output": 6,
+            "cacheRead": 0.2,
+            "cacheCreation": 2.5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3.7-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.03,
+        "output": 0.13,
+        "cacheRead": 0.006,
+        "cacheCreation": 0.0375,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.1,
+            "output": 0.4,
+            "cacheRead": 0.02,
+            "cacheCreation": 0.125,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 256000,
+          "rates": {
+            "input": 0.2,
+            "output": 0.8,
+            "cacheRead": 0.04,
+            "cacheCreation": 0.25,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3.7-max",
+      "provider": "alibaba",
+      "rates": {
+        "input": 2.5,
+        "output": 7.5,
+        "cacheRead": 0.5,
+        "cacheCreation": 3.125,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.7-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.4,
+        "output": 1.6,
+        "cacheRead": 0.08,
+        "cacheCreation": 0.5,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 256000,
+          "rates": {
+            "input": 1.2,
+            "output": 4.8,
+            "cacheRead": 0.24,
+            "cacheCreation": 1.5,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "qwen3.8-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.15,
+        "output": 0.47,
+        "cacheRead": 0.016,
+        "cacheCreation": 0.2,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.8-max",
+      "provider": "alibaba",
+      "rates": {
+        "input": 2,
+        "output": 6,
+        "cacheRead": 0.25,
+        "cacheCreation": 2.5,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwen3.8-omni-flash",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.15,
+        "output": 0.47,
+        "cacheRead": 0.016,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "qwq-plus",
+      "provider": "alibaba",
+      "rates": {
+        "input": 0.8,
+        "output": 2.4,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "step-3.5-flash",
+      "provider": "stepfun",
+      "rates": {
+        "input": 0.10461,
+        "output": 0.31384,
+        "cacheRead": 0.02092,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "step-3.5-flash-2603",
+      "provider": "stepfun",
+      "rates": {
+        "input": 0.10461,
+        "output": 0.31384,
+        "cacheRead": 0.02092,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "step-3.7-flash",
+      "provider": "stepfun",
+      "rates": {
+        "input": 0.20175,
+        "output": 1.21052,
+        "cacheRead": 0.04035,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "step-5-preview",
+      "provider": "stepfun",
+      "rates": {
+        "input": 1.04613,
+        "output": 2.98895,
+        "cacheRead": 0.10461,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mimo-v2.5",
+      "provider": "xiaomi",
+      "rates": {
+        "input": 0.14,
+        "output": 0.28,
+        "cacheRead": 0.0028,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mimo-v2.5-pro",
+      "provider": "xiaomi",
+      "rates": {
+        "input": 0.435,
+        "output": 0.87,
+        "cacheRead": 0.0036,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mimo-v2.5-pro-ultraspeed",
+      "provider": "xiaomi",
+      "rates": {
+        "input": 1.305,
+        "output": 2.61,
+        "cacheRead": 0.0108,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mimo-v2.6-flash",
+      "provider": "xiaomi",
+      "rates": {
+        "input": 0.14,
+        "output": 0.28,
+        "cacheRead": 0.0028,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mimo-v2.6-pro",
+      "provider": "xiaomi",
+      "rates": {
+        "input": 0.435,
+        "output": 0.87,
+        "cacheRead": 0.0036,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "mimo-v2.6-pro-ultraspeed",
+      "provider": "xiaomi",
+      "rates": {
+        "input": 4.35,
+        "output": 8.7,
+        "cacheRead": 0.036,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "doubao-seed-1-6-251015",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.11875,
+        "output": 1.18747,
+        "cacheRead": 0.02375,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.17812,
+            "output": 2.37494,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.35624,
+            "output": 3.56241,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-1-6-flash-250828",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.02227,
+        "output": 0.22265,
+        "cacheRead": 0.00445,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.04453,
+            "output": 0.4453,
+            "cacheRead": 0.00445,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.08906,
+            "output": 0.8906,
+            "cacheRead": 0.00445,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-1-6-vision-250815",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.11875,
+        "output": 1.18747,
+        "cacheRead": 0.02375,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.17812,
+            "output": 2.37494,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.35624,
+            "output": 3.56241,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-1-8-251228",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.11875,
+        "output": 1.18747,
+        "cacheRead": 0.02375,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.17812,
+            "output": 2.37494,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.35624,
+            "output": 3.56241,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-2-0-code-preview-260215",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.47499,
+        "output": 2.37494,
+        "cacheRead": 0.095,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.71248,
+            "output": 3.56241,
+            "cacheRead": 0.1425,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 1.42496,
+            "output": 7.12482,
+            "cacheRead": 0.28499,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-2-0-lite-260428",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.08906,
+        "output": 0.53436,
+        "cacheRead": 0.01781,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.13359,
+            "output": 0.80154,
+            "cacheRead": 0.02672,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.26718,
+            "output": 1.60308,
+            "cacheRead": 0.05344,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-2-0-mini-260428",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.02969,
+        "output": 0.29687,
+        "cacheRead": 0.00594,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.05937,
+            "output": 0.59374,
+            "cacheRead": 0.01187,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 0.11875,
+            "output": 1.18747,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-2-0-pro-260215",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.47499,
+        "output": 2.37494,
+        "cacheRead": 0.095,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.71248,
+            "output": 3.56241,
+            "cacheRead": 0.1425,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        },
+        {
+          "above": 128000,
+          "rates": {
+            "input": 1.42496,
+            "output": 7.12482,
+            "cacheRead": 0.28499,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-2-1-pro-260628",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.8906,
+        "output": 4.45301,
+        "cacheRead": 0.17812,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "doubao-seed-2-1-turbo-260628",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.4453,
+        "output": 2.22651,
+        "cacheRead": 0.08906,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "doubao-seed-character-260628",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.11875,
+        "output": 0.29687,
+        "cacheRead": 0.02375,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      },
+      "tiers": [
+        {
+          "above": 32000,
+          "rates": {
+            "input": 0.17812,
+            "output": 0.8906,
+            "cacheRead": 0.02375,
+            "cacheCreation": null,
+            "cacheCreation1h": null
+          }
+        }
+      ]
+    },
+    {
+      "model": "doubao-seed-evolving",
+      "provider": "volcengine",
+      "rates": {
+        "input": 0.8906,
+        "output": 4.45301,
+        "cacheRead": 0.17812,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "c4ai-aya-expanse-32b",
+      "provider": "cohere",
+      "rates": {
+        "input": 0.5,
+        "output": 1.5,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-a-03-2025",
+      "provider": "cohere",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-a-plus-05-2026",
+      "provider": "cohere",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-a-reasoning-08-2025",
+      "provider": "cohere",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-a-translate-08-2025",
+      "provider": "cohere",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-a-vision-07-2025",
+      "provider": "cohere",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-r-08-2024",
+      "provider": "cohere",
+      "rates": {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-r-plus-08-2024",
+      "provider": "cohere",
+      "rates": {
+        "input": 2.5,
+        "output": 10,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-r7b-12-2024",
+      "provider": "cohere",
+      "rates": {
+        "input": 0.0375,
+        "output": 0.15,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "command-r7b-arabic-02-2025",
+      "provider": "cohere",
+      "rates": {
+        "input": 0.0375,
+        "output": 0.15,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "north-mini-code-1-0",
+      "provider": "cohere",
+      "rates": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
+    },
+    {
+      "model": "north-small-translate-09-2026",
+      "provider": "cohere",
+      "rates": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": null,
+        "cacheCreation": null,
+        "cacheCreation1h": null
+      }
     }
   ]
 }

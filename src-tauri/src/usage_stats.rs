@@ -330,8 +330,9 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// 模型定价（迁移自 cc-switch seed_model_pricing，单位：USD / 1M tokens）
-// (model_id, input, output, cache_read, cache_creation)
+// 模型定价：以 usage-pricing.json（models.dev 第一方价格快照）为准；
+// 下表迁移自 cc-switch seed_model_pricing，仅兜底快照未收录的旧型号。
+// 单位：USD / 1M tokens，(model_id, input, output, cache_read, cache_creation)
 // ---------------------------------------------------------------------------
 
 #[rustfmt::skip]
@@ -560,21 +561,18 @@ struct Pricing {
     cache_creation_1h: Option<f64>,
 }
 
+/// 长上下文分档：单条请求的提示长度超过 `above` 时改用该档单价
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-enum PricingCondition {
-    InputLength { threshold: u64, inclusive: bool },
-    FreshInput { threshold: u64, inclusive: bool },
-    ShanghaiPeak,
+struct PricingTier {
+    above: u64,
+    rates: Pricing,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Deserialize)]
 struct ModelPricing {
     rates: Pricing,
-    condition: Option<PricingCondition>,
-    alternate: Option<Pricing>,
-    per_request: Option<f64>,
+    #[serde(default)]
+    tiers: Vec<PricingTier>,
 }
 
 #[derive(Deserialize)]
@@ -603,7 +601,7 @@ fn reference_pricing_map() -> &'static HashMap<String, ModelPricing> {
     static MAP: OnceLock<HashMap<String, ModelPricing>> = OnceLock::new();
     MAP.get_or_init(|| {
         reference_pricing().models.iter()
-            .map(|entry| (entry.model.clone(), entry.pricing)).collect()
+            .map(|entry| (entry.model.clone(), entry.pricing.clone())).collect()
     })
 }
 
@@ -623,9 +621,7 @@ fn pricing_map() -> &'static HashMap<&'static str, ModelPricing> {
                             cache_creation: Some(*cache_creation),
                             cache_creation_1h: id.starts_with("claude-").then_some(input * 2.0),
                         },
-                        condition: None,
-                        alternate: None,
-                        per_request: None,
+                        tiers: Vec::new(),
                     },
                 )
             })
@@ -761,8 +757,8 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
 /// 按模型名缓存查价结果：定价表是编译期常量，缓存永不失效。
 /// 聚合阶段每条记录都要查价，模糊匹配（候选生成 + 前缀扫描）较贵，
 /// 而不同模型名通常只有几十个，缓存后查价从热路径上消失。
-fn cached_model_pricing(model_id: &str) -> Option<ModelPricing> {
-    static MEMO: OnceLock<Mutex<HashMap<String, Option<ModelPricing>>>> = OnceLock::new();
+fn cached_model_pricing(model_id: &str) -> Option<&'static ModelPricing> {
+    static MEMO: OnceLock<Mutex<HashMap<String, Option<&'static ModelPricing>>>> = OnceLock::new();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(map) = memo.lock() {
         if let Some(cached) = map.get(model_id) {
@@ -776,8 +772,8 @@ fn cached_model_pricing(model_id: &str) -> Option<ModelPricing> {
     pricing
 }
 
-/// 参考快照优先，旧表兜底。只移除已知装饰/日期，不能把未知型号猜成同系列变体。
-fn find_model_pricing(model_id: &str) -> Option<ModelPricing> {
+/// models.dev 快照优先，旧表兜底。只移除已知装饰/日期，不能把未知型号猜成同系列变体。
+fn find_model_pricing(model_id: &str) -> Option<&'static ModelPricing> {
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return None;
@@ -785,22 +781,22 @@ fn find_model_pricing(model_id: &str) -> Option<ModelPricing> {
     let reference = reference_pricing_map();
     for candidate in &candidates {
         if let Some(p) = reference.get(candidate) {
-            return Some(*p);
+            return Some(p);
         }
     }
     let map = pricing_map();
     for candidate in &candidates {
         if let Some(p) = map.get(candidate.as_str()) {
-            return Some(*p);
+            return Some(p);
         }
     }
     for candidate in &candidates {
-        let mut best: Option<(&str, ModelPricing)> = None;
+        let mut best: Option<(&str, &'static ModelPricing)> = None;
         for (id, p) in map.iter() {
             if strip_model_date_suffix(id).as_ref() == Some(candidate) {
                 match best {
                     Some((best_id, _)) if *id <= best_id => {}
-                    _ => best = Some((id, *p)),
+                    _ => best = Some((id, p)),
                 }
             }
         }
@@ -837,29 +833,15 @@ fn valid_reported_cost(record: &UsageRecord) -> Option<f64> {
     record.reported_cost.filter(|cost| cost.is_finite() && *cost >= 0.0)
 }
 
-/// 参考站点的工作日高峰按请求发生时间（上海时区）计算，不能用扫描时刻。
-fn is_shanghai_peak(ts: i64) -> bool {
-    let local = ts + 8 * 3600;
-    let weekday = (local.div_euclid(86400) + 3).rem_euclid(7);
-    let hour = local.rem_euclid(86400) / 3600;
-    weekday < 5 && ((9..12).contains(&hour) || (14..18).contains(&hour))
-}
-
 impl ModelPricing {
+    /// 按单条请求的提示长度（新增输入 + 缓存读取 + 缓存写入）选档，取超过的最高档。
     fn rates_for(&self, record: &UsageRecord) -> Pricing {
-        let fresh = fresh_input_tokens(record);
-        let use_alternate = match self.condition {
-            Some(PricingCondition::InputLength { threshold, inclusive }) => {
-                let length = fresh + record.cache_read_tokens + record.cache_creation_tokens;
-                if inclusive { length > threshold } else { length >= threshold }
-            }
-            Some(PricingCondition::FreshInput { threshold, inclusive }) => {
-                if inclusive { fresh > threshold } else { fresh >= threshold }
-            }
-            Some(PricingCondition::ShanghaiPeak) => is_shanghai_peak(record.created_at),
-            None => false,
-        };
-        if use_alternate { self.alternate.unwrap_or(self.rates) } else { self.rates }
+        let length = fresh_input_tokens(record) + record.cache_read_tokens + record.cache_creation_tokens;
+        self.tiers
+            .iter()
+            .filter(|tier| length > tier.above)
+            .max_by_key(|tier| tier.above)
+            .map_or(self.rates, |tier| tier.rates)
     }
 }
 
@@ -877,11 +859,7 @@ fn record_cost(record: &UsageRecord) -> Option<f64> {
 }
 
 fn local_record_cost(record: &UsageRecord) -> Option<f64> {
-    let pricing = cached_model_pricing(&record.model)?;
-    if let Some(cost) = pricing.per_request {
-        return Some(cost);
-    }
-    token_cost_breakdown(&pricing, record).map(|b| b.total())
+    token_cost_breakdown(cached_model_pricing(&record.model)?, record).map(|b| b.total())
 }
 
 /// 按 token 分项估算（USD）；缓存分量有 token 但缺单价时整体为 None。
@@ -900,17 +878,12 @@ fn token_cost_breakdown(pricing: &ModelPricing, record: &UsageRecord) -> Option<
     })
 }
 
-/// 最近记录的成本分项：仅当金额完全来自本地按 token 估算时提供
-/// （自报成本、按次计价无法拆分）。
+/// 最近记录的成本分项：仅当金额完全来自本地按 token 估算时提供（自报成本无法拆分）。
 fn record_cost_breakdown(record: &UsageRecord) -> Option<UsageCostBreakdown> {
     if valid_reported_cost(record).is_some() {
         return None;
     }
-    let pricing = cached_model_pricing(&record.model)?;
-    if pricing.per_request.is_some() {
-        return None;
-    }
-    token_cost_breakdown(&pricing, record)
+    token_cost_breakdown(cached_model_pricing(&record.model)?, record)
 }
 
 fn record_cost_is_partial(record: &UsageRecord) -> bool {

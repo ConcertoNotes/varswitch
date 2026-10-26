@@ -9495,14 +9495,14 @@ function renderUsageMeta(dashboard) {
     parts.push((zh ? "更新于 " : "Updated at ") + formatUsageTime(dashboard.generatedAt));
   }
   if (dashboard.pricingDate) {
-    parts.push((zh ? "参考价快照 " : "Reference prices ") + dashboard.pricingDate);
+    parts.push((zh ? "models.dev 价格 " : "models.dev prices ") + dashboard.pricingDate);
   }
   const costState = usageCostState(dashboard.summary?.totalCost, dashboard.summary);
   if (costState.detail) parts.push(costState.detail);
   meta.textContent = parts.join(" · ");
   meta.title = [
-    dashboard.pricingSource ? `${zh ? "参考价格" : "Reference prices"}: ${dashboard.pricingSource}` : "",
-    zh ? "按参考价快照及内置兼容价估算，未含渠道倍率；实际账单以服务商为准。" : "Reference snapshot and built-in fallback prices exclude channel multipliers; your provider determines the actual bill.",
+    dashboard.pricingSource ? `${zh ? "价格来源" : "Pricing source"}: ${dashboard.pricingSource}` : "",
+    zh ? "按 models.dev 收录的厂商官方价估算，未收录的旧型号用内置兼容价；不含中转站倍率或加价，实际账单以服务商为准。" : "Estimated with first-party list prices from models.dev, with built-in fallback prices for models it does not list. Reseller multipliers and markups are not included; your provider determines the actual bill.",
     ...errors,
   ].filter(Boolean).join("\n");
 }
@@ -9556,9 +9556,9 @@ function renderUsageHero(summary, prevSummary, byApp, pricing = {}) {
   const prevCostState = prev ? usageCostState(prev.totalCost, prev) : null;
   const costTitle = [
     costState.detail,
-    pricing.pricingSource ? `${zh ? "参考价格" : "Reference prices"}: ${pricing.pricingSource}` : "",
+    pricing.pricingSource ? `${zh ? "价格来源" : "Pricing source"}: ${pricing.pricingSource}` : "",
     pricing.pricingDate || "",
-    zh ? "按参考价快照及内置兼容价估算，未含渠道倍率；实际账单以服务商为准。" : "Reference snapshot and built-in fallback prices exclude channel multipliers; your provider determines the actual bill.",
+    zh ? "按 models.dev 收录的厂商官方价估算，未收录的旧型号用内置兼容价；不含中转站倍率或加价，实际账单以服务商为准。" : "Estimated with first-party list prices from models.dev, with built-in fallback prices for models it does not list. Reseller multipliers and markups are not included; your provider determines the actual bill.",
   ].filter(Boolean).join("\n");
   // 缓存命中率是当前筛选内全部应用/模型的加权聚合；
   // 跨多个应用时在卡片上注明口径，避免被当成某单一工具的命中率
@@ -9576,7 +9576,7 @@ function renderUsageHero(summary, prevSummary, byApp, pricing = {}) {
     {
       label: zh ? "总成本" : "Total Cost",
       value: costState.value,
-      sub: costState.detail || (zh ? "按模型参考价格估算" : "Estimated with reference prices"),
+      sub: costState.detail || (zh ? "按 models.dev 官方价估算" : "Estimated with models.dev list prices"),
       title: costTitle,
       accent: "cost",
       delta: costState.incomplete || prevCostState?.incomplete ? "" : usageHeroDelta(summary.totalCost, prev?.totalCost, {

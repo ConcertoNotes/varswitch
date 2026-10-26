@@ -2,7 +2,7 @@
 
 VarSwitch 是一个面向 Claude Code、Claude Desktop、Codex CLI、Grok CLI、Gemini CLI 和 API 用户的桌面配置管理工具。它通过可视化界面集中管理 API Key / Token、Base URL、模型、编辑器设置、多套应用配置、Skills、Prompts 预设、MCP Server、本机历史会话、Codex 插件市场与移动端控制能力，并提供托盘快速切换、本地代理故障转移、`varswitch://` 深链导入与多设备数据同步。
 
-当前应用版本：`3.2.10`。
+当前应用版本：`3.2.11`。
 
 ## 主要功能
 

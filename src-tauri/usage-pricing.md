@@ -1,44 +1,53 @@
 # 用量监控参考价格
 
-`src-tauri/src/usage-pricing.json` 是 [Strova 模型价格页](https://code.strova.top/pricing)在 **2026-10-25** 的公开价格快照，共 48 个模型。数据来自页面使用的 [公开 API](https://code.strova.top/api/pricing)，快照保存了来源版本、表达式原文或原始倍率，方便核对和更新。
+`src-tauri/src/usage-pricing.json` 由 `scripts/update-usage-pricing.mjs` 从 [models.dev](https://models.dev)（[公开 API](https://models.dev/api.json)，MIT 许可）生成。当前快照日期为 **2026-10-26**，共 254 个模型；快照记录了来源 API 内容的 SHA-256，便于核对。
 
-这些价格用于估算本地日志中的用量，并非用户账户的实际账单，也不代表模型厂商官方价格。快照没有应用渠道分组倍率、账户折扣、税费或历史价格变化。该站价格页在“全部分组”下可能展示可用分组中的最低倍率价格；例如 `codex` 为 `0.14`，`codex-pro` 为 `0.25`。本地会话没有可靠的账单分组信息，因此不能自动套用这些倍率。
+这些价格用于按厂商官方标价估算本地日志中的用量，并非用户账户的实际账单。快照不含中转站倍率、加价、账户折扣、税费或历史价格变化；经中转站使用时，实际扣费可能与此不同（例如 Strova 对 `claude-opus-5-5` 按 Opus 5 的 5 / 25 / 0.5 / 6.25 计费）。
+
+## 取哪些价格
+
+只取厂商第一方 provider，不取 OpenRouter 等聚合或中转站：
+
+`anthropic`、`openai`、`google`、`xai`、`deepseek`、`moonshotai`、`zhipuai`、`minimax`、`mistral`、`alibaba`、`stepfun`、`xiaomi`、`volcengine`、`cohere`
+
+- 按上面的顺序先到先得，同一模型 ID 只保留第一个厂商的价格。
+- 厂商托管别家模型时（`canonical_model_id` 指向其它厂商，如阿里云上的 `kimi-k3`、Mistral 上的 `glm-5-2`）按托管价计费，跳过不用。`volcengine` 只取 `bytedance-seed`（豆包）系列。
+- 没有 `cost`、缺少输入或输出单价的条目跳过；模型 ID 统一转为小写。
 
 ## 字段与计费口径
 
-`rates` 与 `alternate` 的单价均为 **USD / 百万 Tokens**：
+`rates` 与 `tiers[].rates` 的单价均为 **USD / 百万 Tokens**：
 
-| 字段 | 用量 |
-| --- | --- |
-| `input` | 新增输入，不含缓存读取或缓存写入 |
-| `output` | 输出 |
-| `cacheRead` | 缓存读取 |
-| `cacheCreation` | 普通或 5 分钟缓存写入，不含已计入 1 小时写入的部分 |
-| `cacheCreation1h` | 1 小时缓存写入 |
+| 字段 | models.dev 字段 | 用量 |
+| --- | --- | --- |
+| `input` | `cost.input` | 新增输入，不含缓存读取或缓存写入 |
+| `output` | `cost.output` | 输出（思考 token 计入输出） |
+| `cacheRead` | `cost.cache_read` | 缓存读取 |
+| `cacheCreation` | `cost.cache_write` | 普通或 5 分钟缓存写入，不含已计入 1 小时写入的部分 |
+| `cacheCreation1h` | 无 | 1 小时缓存写入 |
 
-费用为各分项 `token 数 × 单价 / 1_000_000` 之和。`perRequest` 的单位是 **USD / 次**；这些条目的 token 单价为零，按请求数累计固定费用。
+费用为各分项 `token 数 × 单价 / 1_000_000` 之和。
 
-缺少公开缓存单价时使用 `null`，不能将其当作免费。若某项 token 数为零，则不需要该项单价；若非零且价格为 `null`，这条记录标为未定价，不纳入已知费用合计。输入和输出单价在本次 48 个模型中均已提供。
+- models.dev 不单列 1 小时缓存写入。`anthropic` 条目按 Anthropic 官方规则取基础输入价的 2 倍，其余厂商为 `null`。
+- 缺少缓存单价时为 `null`，不能当作免费。某项 token 数为零时不需要该项单价；非零且单价为 `null` 时，这条记录标为未定价，不计入已知费用合计。
+- 未采用：`reasoning`（少数 Qwen 模型单列了更高的思考价，本地日志无法区分思考 token）、音频单价、`experimental.modes` 中的 fast 模式、区域或 US-only 附加费、批处理 / Flex / Priority 档位。
 
-## 价格与阶梯转换
+## 长上下文分档
 
-当 API 的 `billing_mode` 为 `tiered_expr` 时，以 `billing_expr` 为准，优先于 `model_ratio`、`completion_ratio` 甚至 `quota_type`。部分模型的旧倍率仍为 `37.5`，不适用于当前表达式。表达式中 `p/c/cr/cc/cc1h` 分别对应上表五项，省略的项系数明确为零。快照保留 `billingExpr` 原文，但运行时只读取已规范化的数字和条件，不执行来源表达式。
+`tiers` 来自 `cost.tiers`，目前只接受 `tier.type = context`，遇到其它类型时生成脚本直接报错：
 
-无表达式的 token 模型按 `input = 2 × model_ratio`、`output = input × completion_ratio` 转换；缓存读取、写入分别再乘 `cache_ratio`、`create_cache_ratio`。缺少倍率时，页面前端返回 `NaN` 并隐藏该项或显示 `—`，**不存在可推断的默认缓存倍率**；1 小时写入也没有独立公开价格，因此保留 `null`。这一行为已核对页面静态资源 `static/js/async/77952.7c171bb3fe.js` 中的价格函数。
+- 提示长度 = 新增输入 + 缓存读取 + 全部缓存写入，按单条请求判断，不对整段时间的总量套用分档。
+- 提示长度**严格大于** `above` 时使用该档；有多档时取超过的最高一档。依据是 models.dev 源数据的 `when = { context = { gt = N } }`，与 Anthropic（"over 100,000 tokens"）和 OpenAI（">272K input tokens"）官方说明一致。
 
-阶梯按单条请求选择，不对整个时间段的 token 总数套用阶梯：
+## 兜底与查价
 
-- `condition.kind = inputLength`：完整输入长度，即新增输入 + 缓存读取 + 全部缓存写入。来源表达式使用 `len`；它在多模态请求中还包括图像、音频输入，本地日志未提供这些明细时只能按已知输入量估算。
-- `condition.kind = freshInput`：仅新增输入。`gpt-6.1-sol` 的来源条件是 `p < 272000`，不能替换成完整输入长度。
-- 上述两种条件中，`inclusive = true` 表示 `值 <= threshold` 时使用 `rates`，否则使用 `alternate`；`false` 表示 `值 < threshold` 时使用 `rates`，其余使用 `alternate`。边界差异按来源原样保留。
-- `condition.kind = shanghaiPeak`：按请求时间换算到上海时区（UTC+08:00）。周一至周五的 `[09:00, 12:00)` 或 `[14:00, 18:00)` 使用 `alternate`，其余使用 `rates`。四个 DeepSeek 条目使用此条件；快照已将来源的“高峰/基础”分支转换成“基础 rates / 高峰 alternate”。
-
-快照保留了站点原始的特殊数值，例如 `gpt-6-luna` 输入/输出为 `75/150`，`gpt-5.6-luna` 长输入输出价为 `1.800003`。这些数值没有用其它模型价格替换。
+查价时先查 models.dev 快照；快照未收录的旧型号（带日期的旧版 Claude、豆包基础名等）再用 `usage_stats.rs` 中迁移自 cc-switch 的内置兼容价。模型名只剥离已知供应商前缀、日期和推理强度后缀，不猜测未知型号。所有页面的总 Tokens 统一包含新增输入、输出、缓存读取和缓存写入，1 小时写入属于写入总量的子集。
 
 ## 更新与核对
 
-重新获取公开 API 后，应优先检查 `billing_expr`，只转换可识别的固定费用、线性 token 项、输入长度阶梯和上述上海高峰时段条件。新增计费形式应先实现并验证对应规则；不能静默忽略表达式而退回旧倍率。
+```bash
+npm run pricing:update                                  # 下载最新 models.dev 数据并重写快照
+node scripts/update-usage-pricing.mjs path/to/api.json  # 使用本地文件生成
+```
 
-更新时同时记录日期和来源版本，核对模型数量、所有五项价格、`<` 与 `<=` 边界、1 小时缓存写入、固定费用，以及高峰分支顺序。未知模型或缺失价格应保留未定价状态，避免显示为零成本。
-
-快照优先于旧版内置价格；快照未列出的旧模型仍可使用内置兼容价格。模型名只剥离已知供应商、日期和推理强度后缀，不猜测未知型号。所有页面的总 Tokens 统一包含新增输入、输出、缓存读取和缓存写入，1 小时写入属于写入总量的子集。
+更新后运行 `npm test` 与 `cargo test --lib usage_stats`。`bundled_models_dev_snapshot_has_valid_rates_and_official_anchors` 中的锚点价格已于 2026-10-26 与 Anthropic、OpenAI 官方价格页核对；锚点失败时，先到厂商官方价格页确认是官方调价还是 models.dev 数据有误，再更新锚点。

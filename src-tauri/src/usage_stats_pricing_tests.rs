@@ -28,16 +28,19 @@ fn assert_cost(record: &UsageRecord, expected: f64) {
 }
 
 #[test]
-fn current_models_use_reference_rates_and_cache_write_costs() {
+fn current_models_use_models_dev_rates_and_cache_write_costs() {
     for (model, expected) in [
         ("claude-opus-5-5", 0.00762),
-        ("claude-sonnet-5-5", 0.00387),
+        // Opus 5.5 / Sonnet 5.5 缓存读取为基础输入价的 0.05 倍
+        ("claude-sonnet-5-5", 0.00381),
         ("claude-fable-5-1", 0.01890),
+        ("claude-haiku-5-5", 0.0001935),
     ] {
         assert_cost(&record("claude", model), expected);
     }
     assert_cost(&record("codex", "gpt-6.1-sol"), 0.00201);
     assert_cost(&record("codex", "gpt-6-astra"), 0.01035);
+    assert_cost(&record("codex", "gpt-5.6-sol"), 0.00414);
     let mut claude = record("claude", "claude-opus-5-5");
     claude.cache_creation_1h_tokens = 200;
     assert_cost(&claude, 0.00822);
@@ -56,6 +59,8 @@ fn aliases_keep_model_identity_and_reference_prices_override_legacy_dates() {
     }
     assert_cost(&record("codex", "openai/gpt-6.1-sol-ultra"), 0.00201);
     assert_cost(&record("claude", "claude-sonnet-4-5-20250929"), 0.005805);
+    // 快照未收录的旧型号仍由内置兼容价兜底
+    assert!(find_model_pricing("claude-sonnet-4-20250514").is_some());
     // 裸名只允许匹配同型号的日期后缀，不能猜测一个更贵/更便宜的变体。
     assert!(find_model_pricing("claude-opus-4-5").is_some());
     assert!(find_model_pricing("gpt-6").is_none());
@@ -64,44 +69,49 @@ fn aliases_keep_model_identity_and_reference_prices_override_legacy_dates() {
 }
 
 #[test]
-fn tier_thresholds_respect_inclusive_boundary_and_fresh_vs_total_input() {
-    let mut r = record("codex", "gpt-6-sol");
-    let pricing = find_model_pricing(&r.model).unwrap();
-    r.input_tokens = 199_999;
-    assert_eq!(pricing.rates_for(&r).input, 2.0);
-    r.input_tokens = 200_000;
-    assert_eq!(pricing.rates_for(&r).input, 4.0);
-
-    r.model = "gpt-6-astra".into();
+fn context_tiers_switch_only_above_threshold_on_total_prompt_length() {
+    // 提示长度 = 新增输入 + 缓存读取 + 缓存写入；Codex 的 input 已含缓存。
+    let mut r = record("codex", "gpt-6.1-sol");
     let pricing = find_model_pricing(&r.model).unwrap();
     r.input_tokens = 272_000;
-    assert_eq!(pricing.rates_for(&r).input, 10.0);
-    r.input_tokens += 1;
-    assert_eq!(pricing.rates_for(&r).input, 20.0);
-
-    r.model = "gpt-6.1-sol".into();
-    let pricing = find_model_pricing(&r.model).unwrap();
-    // 该站此型号的阈值是 p（新增输入），并非包含缓存的 len。
-    r.input_tokens = 272_899;
     assert_eq!(pricing.rates_for(&r).input, 2.0);
     r.input_tokens += 1;
     assert_eq!(pricing.rates_for(&r).input, 4.0);
+    assert_eq!(pricing.rates_for(&r).cache_read, Some(0.2));
+
+    // Claude 的 input 不含缓存：99_100 + 600 + 300 = 100_000，恰好不超过档位。
+    let mut r = record("claude", "claude-haiku-5-5");
+    let pricing = find_model_pricing(&r.model).unwrap();
+    r.input_tokens = 99_100;
+    assert_eq!(pricing.rates_for(&r).output, 0.5);
+    r.input_tokens += 1;
+    let long = pricing.rates_for(&r);
+    assert_eq!((long.input, long.output, long.cache_creation_1h), (0.5, 2.5, Some(1.0)));
 }
 
 #[test]
-fn peak_prices_use_historical_shanghai_weekday_and_hour() {
-    let mut r = record("codex", "deepseek-v4.1-flash");
-    let pricing = find_model_pricing(&r.model).unwrap();
-    for (timestamp, input_rate) in [
-        ("2026-10-23T00:59:59Z", 1.0), // Friday 08:59
-        ("2026-10-23T01:00:00Z", 2.0),
-        ("2026-10-23T04:00:00Z", 1.0), // lunch break
-        ("2026-10-23T06:00:00Z", 2.0),
-        ("2026-10-23T10:00:00Z", 1.0),
-        ("2026-10-25T01:00:00Z", 1.0), // Sunday
-    ] {
-        r.created_at = parse_rfc3339_to_unix(timestamp).unwrap();
-        assert_eq!(pricing.rates_for(&r).input, input_rate, "{timestamp}");
+fn multiple_tiers_pick_the_highest_exceeded_threshold() {
+    let rates = |input| Pricing {
+        input,
+        output: input,
+        cache_read: None,
+        cache_creation: None,
+        cache_creation_1h: None,
+    };
+    // 档位顺序不影响选择
+    let pricing = ModelPricing {
+        rates: rates(1.0),
+        tiers: vec![
+            PricingTier { above: 128_000, rates: rates(3.0) },
+            PricingTier { above: 32_000, rates: rates(2.0) },
+        ],
+    };
+    let mut r = record("claude", "any");
+    r.cache_read_tokens = 0;
+    r.cache_creation_tokens = 0;
+    for (input, expected) in [(32_000, 1.0), (32_001, 2.0), (128_000, 2.0), (128_001, 3.0)] {
+        r.input_tokens = input;
+        assert_eq!(pricing.rates_for(&r).input, expected, "{input}");
     }
 }
 
@@ -125,12 +135,11 @@ fn missing_rates_are_unknown_but_reported_zero_and_lower_bounds_are_preserved() 
     r.model = "unknown-model".into();
     assert_eq!(record_cost(&r), None);
 
-    // 参考站未提供 gpt-6-luna 的缓存价格，不能自动按0或套其它型号。
-    r = record("codex", "gpt-6-luna");
+    // models.dev 未给 gpt-5.5 缓存写入价，不能自动按 0 或套其它型号。
+    r = record("codex", "gpt-5.5");
     assert_eq!(record_cost(&r), None);
-    r.cache_read_tokens = 0;
     r.cache_creation_tokens = 0;
-    assert_cost(&r, 0.09);
+    assert_cost(&r, 0.0053);
 }
 
 #[test]
@@ -198,9 +207,9 @@ fn dashboard_totals_and_pricing_coverage_agree_across_every_view() {
 }
 
 #[test]
-fn bundled_reference_prices_have_valid_rates_and_explicit_conditions() {
+fn bundled_models_dev_snapshot_has_valid_rates_and_official_anchors() {
     let reference = reference_pricing();
-    assert_eq!(reference.source, "https://code.strova.top/pricing");
+    assert_eq!(reference.source, "https://models.dev");
     let mut names = HashSet::new();
     for entry in &reference.models {
         assert!(
@@ -208,14 +217,11 @@ fn bundled_reference_prices_have_valid_rates_and_explicit_conditions() {
             "duplicate model {}",
             entry.model
         );
-        let p = entry.pricing;
-        assert_eq!(
-            p.condition.is_some(),
-            p.alternate.is_some(),
-            "{}",
-            entry.model
-        );
-        for rates in std::iter::once(p.rates).chain(p.alternate) {
+        let p = &entry.pricing;
+        for tier in &p.tiers {
+            assert!(tier.above > 0, "{}", entry.model);
+        }
+        for rates in std::iter::once(p.rates).chain(p.tiers.iter().map(|tier| tier.rates)) {
             for rate in [
                 Some(rates.input),
                 Some(rates.output),
@@ -230,6 +236,16 @@ fn bundled_reference_prices_have_valid_rates_and_explicit_conditions() {
             }
         }
     }
+    // 与厂商官方价格页核对过的锚点，防止快照回归成中转站价格
+    let rates = |model: &str| {
+        let r = reference_pricing_map()[model].rates;
+        (r.input, r.output, r.cache_read, r.cache_creation, r.cache_creation_1h)
+    };
+    assert_eq!(rates("claude-opus-5-5"), (4.0, 20.0, Some(0.2), Some(5.0), Some(8.0)));
+    assert_eq!(rates("claude-sonnet-5-5"), (2.0, 10.0, Some(0.1), Some(2.5), Some(4.0)));
+    assert_eq!(rates("claude-haiku-5-5"), (0.1, 0.5, Some(0.01), Some(0.125), Some(0.2)));
+    assert_eq!(rates("gpt-5.6-sol"), (4.0, 20.0, Some(0.4), Some(5.0), None));
+    assert_eq!(rates("gpt-6-luna"), (0.1, 0.5, Some(0.01), Some(0.125), None));
 }
 
 #[test]

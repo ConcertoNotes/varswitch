@@ -45,11 +45,11 @@ test("usage costs distinguish missing prices, partial amounts and real zero", ()
 test("unknown prices remain visible across hero, apps, models, recent records and trends", () => {
   const { context: c, node } = usageView();
   const s = summary({ unpricedRequests: 2 });
-  c.renderUsageHero(s, summary({ totalCost: 3 }), [], { pricingSource: "https://code.strova.top/pricing", pricingDate: "2026-10-25" });
+  c.renderUsageHero(s, summary({ totalCost: 3 }), [], { pricingSource: "https://models.dev", pricingDate: "2026-10-26" });
   const heroCost = node("usageHeroGrid").innerHTML.split("usage-accent-tokens")[0];
   assert.match(heroCost, /待定价/);
   assert.doesNotMatch(heroCost, /\$0\.00|usage-hero-delta/);
-  assert.match(heroCost, /https:\/\/code\.strova\.top\/pricing/);
+  assert.match(heroCost, /https:\/\/models\.dev/);
   c.renderUsageApps([{ app: "codex", summary: s }], s);
   assert.match(node("usageAppGrid").innerHTML, /待定价/);
   assert.doesNotMatch(node("usageAppGrid").innerHTML, /N\/A|\$0\.00/);
@@ -132,8 +132,8 @@ test("trend slots retain missing-price counts for hourly and bounded daily range
 
 test("pricing snapshot metadata states source and estimation basis", () => {
   const { context: c, node } = usageView();
-  c.renderUsageMeta({ summary: summary(), filesScanned: 3, pricingSource: "https://code.strova.top/pricing", pricingDate: "2026-10-25" });
-  assert.match(node("usageMetaLine").textContent, /参考价快照 2026-10-25/);
-  assert.match(node("usageMetaLine").title, /https:\/\/code\.strova\.top\/pricing/);
+  c.renderUsageMeta({ summary: summary(), filesScanned: 3, pricingSource: "https://models.dev", pricingDate: "2026-10-26" });
+  assert.match(node("usageMetaLine").textContent, /models\.dev 价格 2026-10-26/);
+  assert.match(node("usageMetaLine").title, /https:\/\/models\.dev/);
   assert.match(node("usageMetaLine").title, /实际账单以服务商为准/);
 });

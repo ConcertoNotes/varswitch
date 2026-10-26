@@ -1132,8 +1132,16 @@ base_url = "https://chat.example.com/v1"
         );
     }
 
+    /// smart_control 的客户端状态、分片与对话累积都是进程级全局变量；读写它们的测试
+    /// 必须串行，否则并行时 reset 会清掉其它测试尚未完成的累积（例如只剩 "world"）。
+    fn smart_control_state_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn smart_control_wraps_client_message_with_envelope_identity() {
+        let _guard = smart_control_state_guard();
         smart_control_reset_client_state();
         let message = smart_control_initialize_message(7);
         let envelope = smart_control_wrap_client_message(message);
@@ -1155,6 +1163,7 @@ base_url = "https://chat.example.com/v1"
 
     #[test]
     fn smart_control_reassembles_server_message_chunk() {
+        let _guard = smart_control_state_guard();
         smart_control_reset_client_state();
         let message = json!({"id": 9, "result": {"text": "chunked"}});
         let raw = serde_json::to_vec(&message).unwrap();
@@ -1209,6 +1218,7 @@ base_url = "https://chat.example.com/v1"
 
     #[test]
     fn smart_control_turn_accumulator_completes_pending() {
+        let _guard = smart_control_state_guard();
         let request_id = 777;
         smart_control_register_pending(request_id);
         smart_control_observe_turn_item(&json!({
@@ -1227,6 +1237,7 @@ base_url = "https://chat.example.com/v1"
 
     #[test]
     fn smart_control_delta_does_not_complete_pending_before_done() {
+        let _guard = smart_control_state_guard();
         let request_id = 778;
         smart_control_register_pending(request_id);
         smart_control_maybe_complete_pending(&json!({
