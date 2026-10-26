@@ -13,6 +13,8 @@ fn record(app: &str, model: &str) -> UsageRecord {
         created_at: parse_rfc3339_to_unix("2026-10-25T00:00:00Z").unwrap(),
         reported_cost: None,
         cost_partial: false,
+        project: None,
+        session_id: None,
     }
 }
 
@@ -228,4 +230,42 @@ fn bundled_reference_prices_have_valid_rates_and_explicit_conditions() {
             }
         }
     }
+}
+
+#[test]
+fn recent_logs_carry_session_context_and_cost_breakdown() {
+    let mut claude = record("claude", "claude-opus-5-5");
+    claude.cache_creation_1h_tokens = 200;
+    claude.project = Some("/work/varswitch".into());
+    claude.session_id = Some("claude-session".into());
+    let mut grok = record("grok", "custom-model");
+    grok.reported_cost = Some(0.5);
+    let ts = claude.created_at;
+    let dashboard = aggregate_usage_dashboard(
+        CollectOutcome {
+            records: vec![claude, grok],
+            files_scanned: 2,
+            deferred_files: 0,
+            errors: vec![],
+        },
+        Some(ts),
+        Some(ts),
+        None,
+        None,
+        Some(-480),
+    );
+    let log = dashboard.recent.iter().find(|x| x.app == "claude").unwrap();
+    assert_eq!(log.project.as_deref(), Some("/work/varswitch"));
+    assert_eq!(log.session_id.as_deref(), Some("claude-session"));
+    assert_eq!(log.cache_creation_1h_tokens, 200);
+    let breakdown = log.cost_breakdown.expect("locally priced records expose components");
+    assert!((breakdown.total() - log.cost.unwrap()).abs() < 1e-12);
+    assert!((breakdown.cache_read - 600.0 * 0.2 / 1e6).abs() < 1e-12);
+    assert!((breakdown.cache_creation - (100.0 * 5.0 + 200.0 * 8.0) / 1e6).abs() < 1e-12);
+    // 自报成本无法按 token 拆分
+    let reported = dashboard.recent.iter().find(|x| x.app == "grok").unwrap();
+    assert!(reported.cost_breakdown.is_none());
+    let json = serde_json::to_value(log).unwrap();
+    assert!(json["costBreakdown"]["cacheRead"].is_number());
+    assert_eq!(json["sessionId"], "claude-session");
 }

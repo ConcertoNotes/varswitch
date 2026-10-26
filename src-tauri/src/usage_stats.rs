@@ -164,6 +164,12 @@ struct UsageRecord {
     reported_cost: Option<f64>,
     /// 上游标记自报成本为部分值（下界）
     cost_partial: bool,
+    /// 会话工作目录（Claude / Codex 日志自带 cwd，其余应用为空）
+    #[serde(default)]
+    project: Option<String>,
+    /// 来源会话 ID（Codex 为根线程 ID）
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 /// Codex 会话文件解析结果（保留 token 事件签名以支持 fork 回放去重）
@@ -197,6 +203,9 @@ struct ParsedCodexFile {
     has_token_without_timestamp: bool,
     /// 全部 token 事件的最大时间戳
     max_event_ts: Option<i64>,
+    /// root session_meta 记录的工作目录
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 /// 解析缓存条目
@@ -224,7 +233,8 @@ static CACHE_DIRTY: AtomicBool = AtomicBool::new(false);
 /// 解析结果结构或语义变化时递增，旧缓存文件自动作废。
 /// v2：缺 timestamp 的记录改为跳过（旧缓存可能含回退为扫描时刻的伪时间戳）
 /// v3：保留 Codex 缓存写入计数及 Claude 一小时缓存写入计数。
-const DISK_CACHE_VERSION: u32 = 3;
+/// v4：记录携带项目目录与会话 ID（最近记录展示用）。
+const DISK_CACHE_VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 struct DiskCache {
@@ -871,16 +881,36 @@ fn local_record_cost(record: &UsageRecord) -> Option<f64> {
     if let Some(cost) = pricing.per_request {
         return Some(cost);
     }
+    token_cost_breakdown(&pricing, record).map(|b| b.total())
+}
+
+/// 按 token 分项估算（USD）；缓存分量有 token 但缺单价时整体为 None。
+fn token_cost_breakdown(pricing: &ModelPricing, record: &UsageRecord) -> Option<UsageCostBreakdown> {
     let p = pricing.rates_for(record);
     let one_hour = record.cache_creation_1h_tokens.min(record.cache_creation_tokens);
     let component = |tokens: u64, rate: Option<f64>| {
-        if tokens == 0 { Some(0.0) } else { rate.map(|r| tokens as f64 * r) }
+        if tokens == 0 { Some(0.0) } else { rate.map(|r| tokens as f64 * r / 1e6) }
     };
-    Some((fresh_input_tokens(record) as f64 * p.input
-        + record.output_tokens as f64 * p.output
-        + component(record.cache_read_tokens, p.cache_read)?
-        + component(record.cache_creation_tokens - one_hour, p.cache_creation)?
-        + component(one_hour, p.cache_creation_1h)?) / 1e6)
+    Some(UsageCostBreakdown {
+        input: fresh_input_tokens(record) as f64 * p.input / 1e6,
+        output: record.output_tokens as f64 * p.output / 1e6,
+        cache_read: component(record.cache_read_tokens, p.cache_read)?,
+        cache_creation: component(record.cache_creation_tokens - one_hour, p.cache_creation)?
+            + component(one_hour, p.cache_creation_1h)?,
+    })
+}
+
+/// 最近记录的成本分项：仅当金额完全来自本地按 token 估算时提供
+/// （自报成本、按次计价无法拆分）。
+fn record_cost_breakdown(record: &UsageRecord) -> Option<UsageCostBreakdown> {
+    if valid_reported_cost(record).is_some() {
+        return None;
+    }
+    let pricing = cached_model_pricing(&record.model)?;
+    if pricing.per_request.is_some() {
+        return None;
+    }
+    token_cost_breakdown(&pricing, record)
 }
 
 fn record_cost_is_partial(record: &UsageRecord) -> bool {
@@ -960,6 +990,8 @@ struct ClaudeParsedMessage {
     cache_creation_1h_tokens: u64,
     stop_reason: Option<String>,
     timestamp: Option<i64>,
+    cwd: Option<String>,
+    session_id: Option<String>,
 }
 
 fn parse_claude_file(path: &Path) -> Result<ParsedFile, String> {
@@ -1024,6 +1056,8 @@ fn parse_claude_file(path: &Path) -> Result<ParsedFile, String> {
                 .get("timestamp")
                 .and_then(|v| v.as_str())
                 .and_then(parse_rfc3339_to_unix),
+            cwd: non_empty_string(value.get("cwd")),
+            session_id: non_empty_string(value.get("sessionId")),
         };
 
         // 按 message.id 去重：优先保留有 stop_reason 的条目，同态时取 output 更大者
@@ -1070,6 +1104,8 @@ fn parse_claude_file(path: &Path) -> Result<ParsedFile, String> {
             created_at,
             reported_cost: None,
             cost_partial: false,
+            project: msg.cwd,
+            session_id: msg.session_id,
         });
     }
     Ok(ParsedFile::Records(records))
@@ -1322,6 +1358,7 @@ fn parse_codex_file(path: &Path) -> Result<ParsedFile, String> {
     let mut has_billable_tokens = false;
     let mut has_token_without_timestamp = false;
     let mut max_event_ts: Option<i64> = None;
+    let mut cwd: Option<String> = None;
 
     for line_result in reader.lines() {
         let line = match line_result {
@@ -1357,6 +1394,7 @@ fn parse_codex_file(path: &Path) -> Result<ParsedFile, String> {
                     .and_then(parse_rfc3339_to_unix);
                 let payload = value.get("payload").cloned().unwrap_or(serde_json::Value::Null);
                 parent = codex_parent_from_meta(&payload);
+                cwd = non_empty_string(payload.get("cwd"));
 
                 let meta_thread_id = non_empty_string(
                     payload
@@ -1518,6 +1556,7 @@ fn parse_codex_file(path: &Path) -> Result<ParsedFile, String> {
         has_billable_tokens,
         has_token_without_timestamp,
         max_event_ts,
+        cwd,
     }))
 }
 
@@ -1641,6 +1680,8 @@ fn parse_gemini_file(path: &Path) -> Result<ParsedFile, String> {
             created_at,
             reported_cost: None,
             cost_partial: false,
+            project: None,
+            session_id: (session_id != "unknown").then(|| session_id.clone()),
         });
     }
     Ok(ParsedFile::Records(records))
@@ -1805,6 +1846,8 @@ fn parse_grok_file(path: &Path) -> Result<ParsedFile, String> {
                 created_at,
                 reported_cost,
                 cost_partial: event_cost_partial || turn.cost_partial,
+                project: None,
+                session_id: (session_id != "unknown").then(|| session_id.clone()),
             });
         }
     }
@@ -1892,9 +1935,29 @@ pub struct RecentUsageLog {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    pub cache_creation_1h_tokens: u64,
     pub total_tokens: u64,
     pub cost: Option<f64>,
     pub cost_partial: bool,
+    pub cost_breakdown: Option<UsageCostBreakdown>,
+    pub project: Option<String>,
+    pub session_id: Option<String>,
+}
+
+/// 单条请求的成本分项（USD）；缓存写入含一小时缓存
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCostBreakdown {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_creation: f64,
+}
+
+impl UsageCostBreakdown {
+    fn total(&self) -> f64 {
+        self.input + self.output + self.cache_read + self.cache_creation
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -2095,6 +2158,8 @@ fn collect_all_records(data_dir: &Path) -> CollectOutcome {
                 created_at,
                 reported_cost: None,
                 cost_partial: false,
+                project: parsed.cwd.clone(),
+                session_id: Some(root_thread_id.to_string()),
             });
         }
         let _ = path;
@@ -2410,9 +2475,15 @@ fn aggregate_usage_dashboard(
                 output_tokens: record.output_tokens,
                 cache_read_tokens: record.cache_read_tokens,
                 cache_creation_tokens: record.cache_creation_tokens,
+                cache_creation_1h_tokens: record
+                    .cache_creation_1h_tokens
+                    .min(record.cache_creation_tokens),
                 total_tokens: real_total_tokens(record),
                 cost: record_cost(record),
                 cost_partial: record_cost_is_partial(record),
+                cost_breakdown: record_cost_breakdown(record),
+                project: record.project.clone(),
+                session_id: record.session_id.clone(),
             }
         })
         .collect();
@@ -2508,6 +2579,8 @@ mod tests {
             created_at: 0,
             reported_cost: None,
             cost_partial: false,
+            project: None,
+            session_id: None,
         };
         let cost = record_cost(&claude).unwrap();
         // 1000*3/1M + 500*15/1M + 200*0.3/1M + 100*3.75/1M = 0.010935
@@ -2526,6 +2599,8 @@ mod tests {
             created_at: 0,
             reported_cost: None,
             cost_partial: false,
+            project: None,
+            session_id: None,
         };
         let cost = record_cost(&codex).unwrap();
         // (1000-600)*2.5/1M + 600*0.25/1M = 0.001 + 0.00015 = 0.00115
@@ -2538,6 +2613,7 @@ mod tests {
         use serde_json::json;
         let message = |id: &str, usage: serde_json::Value| json!({
             "type": "assistant", "timestamp": "2026-10-25T00:00:00Z",
+            "cwd": "/work/varswitch", "sessionId": "claude-session",
             "message": {"id": id, "model": "claude-opus-5-5", "usage": usage}
         });
         let events = [
@@ -2570,6 +2646,8 @@ mod tests {
         assert_eq!(by_id["session:detail-only"].cache_creation_tokens, 500);
         assert_eq!(by_id["session:detail-only"].cache_creation_1h_tokens, 200);
         assert_eq!(by_id["session:bounded"].cache_creation_1h_tokens, 100);
+        assert_eq!(by_id["session:bounded"].project.as_deref(), Some("/work/varswitch"));
+        assert_eq!(by_id["session:bounded"].session_id.as_deref(), Some("claude-session"));
         // 一小时子计数只影响价格，不能把统计 token 总量再次加一遍。
         assert_eq!(summarize(&records.iter().collect::<Vec<_>>()).real_total_tokens, 700);
     }
@@ -2661,6 +2739,12 @@ mod tests {
             "input_tokens": 1000, "cache_read_input_tokens": 600, "output_tokens": 20
         }))]);
         assert_eq!(legacy.events[0].delta, (1000, 600, 20, 0));
+
+        let with_meta = parse_codex_fixture(&[json!({
+            "type": "session_meta", "timestamp": "2026-10-25T00:00:00Z",
+            "payload": {"id": "thread", "cwd": "/work/codex"}
+        })]);
+        assert_eq!(with_meta.cwd.as_deref(), Some("/work/codex"));
     }
 
     #[test]

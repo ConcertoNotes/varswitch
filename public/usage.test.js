@@ -60,7 +60,7 @@ test("unknown prices remain visible across hero, apps, models, recent records an
   assert.doesNotMatch(node("usageModelTableBody").innerHTML, /usage-share-fill|\$0\.00/);
   c.renderUsageRecent([{ model: "new-model", app: "codex", cost: null, totalTokens: 160, cacheCreationTokens: 30 }]);
   assert.match(node("usageRecentTableBody").innerHTML, /待定价/);
-  assert.match(node("usageRecentTableBody").innerHTML, /缓存写 30/);
+  assert.match(node("usageRecentTableBody").innerHTML, /title="30">30<\/td>/);
   assert.doesNotMatch(node("usageRecentTableBody").innerHTML, /\$0\.00/);
   c.renderUsageTrend({ daily: [{ date: "2026-10-25", ...m }] });
   assert.match(node("usageTrendChart").innerHTML, /待定价/);
@@ -83,6 +83,33 @@ test("partial totals suppress misleading cost shares, comparisons and peaks", ()
   c.renderUsageRecent([{ cost: 0, costPartial: true }]);
   assert.match(node("usageRecentTableBody").innerHTML, /≥ \$0\.00/);
   assert.match(node("usageRecentTableBody").innerHTML, /仅有部分成本/);
+});
+
+test("recent records show per-request token columns, project context and cost breakdown", () => {
+  const { context: c, node } = usageView();
+  c.renderUsageRecent([{
+    time: 1793005237, app: "claude", model: "claude-opus-5-5",
+    inputTokens: 2, outputTokens: 181, cacheReadTokens: 230265,
+    cacheCreationTokens: 12052, cacheCreation1hTokens: 2000, totalTokens: 242500,
+    cost: 0.109941,
+    costBreakdown: { input: 0.000008, output: 0.00362, cacheRead: 0.046053, cacheCreation: 0.06026 },
+    project: "/Users/me/Desktop/varswitch", sessionId: "92e676d1-5ed8-4541-afd0-3a935995df2a",
+  }]);
+  const html = node("usageRecentTableBody").innerHTML;
+  assert.equal(html.match(/<td/g).length, 10);
+  assert.match(html, /usage-td-clip">varswitch</);
+  assert.match(html, /\/Users\/me\/Desktop\/varswitch\n会话 92e676d1-5ed8/);
+  assert.match(html, /usage-td-sub">92e676d1</);
+  assert.match(html, />230\.3K</);
+  assert.match(html, /其中 1 小时缓存 2,000/);
+  assert.match(html, /命中 95\.0%/);
+  assert.match(html, /缓存读取 \$0\.046\n缓存写入 \$0\.060/);
+  assert.match(html, />\$0\.110</);
+
+  c.renderUsageRecent([{ app: "codex", model: "m", project: "C:\\work\\proj\\", cost: 0 }]);
+  assert.match(node("usageRecentTableBody").innerHTML, /usage-td-clip">proj</);
+  c.renderUsageRecent([{ app: "gemini", model: "m", cost: 0 }]);
+  assert.match(node("usageRecentTableBody").innerHTML, /usage-td-clip">—</);
 });
 
 test("trend slots retain missing-price counts for hourly and bounded daily ranges", () => {

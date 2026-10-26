@@ -9927,6 +9927,26 @@ function renderUsageModels(models) {
     .join("");
 }
 
+// 项目目录只显示末级名称，完整路径放 title（兼容 Windows 分隔符）
+function usageProjectName(path) {
+  const trimmed = String(path || "").replace(/[\\/]+$/, "");
+  return trimmed.split(/[\\/]/).pop() || trimmed;
+}
+
+// 最近记录的精确时间：当天只显示时分秒，跨天补月日，跨年补年份
+function formatUsageClock(unixSeconds, withFullDate = false) {
+  if (!unixSeconds) return "--";
+  const date = new Date(unixSeconds * 1000);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  if (withFullDate || date.getFullYear() !== now.getFullYear()) {
+    return `${date.getFullYear()}-${day} ${clock}`;
+  }
+  return date.toDateString() === now.toDateString() ? clock : `${day} ${clock}`;
+}
+
 function renderUsageRecent(recent) {
   const tbody = $("usageRecentTableBody");
   if (!tbody) return;
@@ -9936,19 +9956,47 @@ function renderUsageRecent(recent) {
     zh ? `最近 ${recent.length} 条` : `Latest ${recent.length}`
   );
   if (!recent.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="usage-muted">${zh ? "暂无记录" : "No records"}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="usage-muted">${zh ? "暂无记录" : "No records"}</td></tr>`;
     return;
   }
+  const sub = (text) => (text ? `<span class="usage-td-sub">${escapeUsageHtml(text)}</span>` : "");
+  const tokenCell = (tokens, title = formatUsageTokensExact(tokens), extra = "") =>
+    `<td class="usage-td-num" title="${escapeUsageHtml(title)}">${escapeUsageHtml(formatUsageTokens(tokens))}${extra}</td>`;
   tbody.innerHTML = recent
     .map((log) => {
       const costState = usageCostState(log.cost, log);
+      const breakdown = log.costBreakdown;
+      const costTitle = [
+        breakdown && [
+          `${zh ? "输入" : "Input"} ${formatUsageCost(breakdown.input)}`,
+          `${zh ? "输出" : "Output"} ${formatUsageCost(breakdown.output)}`,
+          `${zh ? "缓存读取" : "Cache read"} ${formatUsageCost(breakdown.cacheRead)}`,
+          `${zh ? "缓存写入" : "Cache write"} ${formatUsageCost(breakdown.cacheCreation)}`,
+        ].join("\n"),
+        costState.detail,
+      ].filter(Boolean).join("\n");
+      const cacheRead = Number(log.cacheReadTokens) || 0;
+      const cacheable = (Number(log.inputTokens) || 0) + cacheRead + (Number(log.cacheCreationTokens) || 0);
+      const hitRate = cacheable > 0 ? `${zh ? "命中" : "Hit"} ${((cacheRead / cacheable) * 100).toFixed(1)}%` : "";
+      const oneHour = Number(log.cacheCreation1hTokens) || 0;
+      const cacheWriteTitle = oneHour > 0
+        ? `${formatUsageTokensExact(log.cacheCreationTokens)}\n${zh ? "其中 1 小时缓存" : "1h cache"} ${formatUsageTokensExact(oneHour)}`
+        : undefined;
+      const projectTitle = [log.project, log.sessionId && `${zh ? "会话" : "Session"} ${log.sessionId}`]
+        .filter(Boolean)
+        .join("\n");
       return `
       <tr>
-        <td class="usage-td-time" title="${escapeUsageHtml(formatUsageTime(log.time))}">${escapeUsageHtml(formatUsageRelTime(log.time))}</td>
+        <td class="usage-td-time" title="${escapeUsageHtml(formatUsageClock(log.time, true))}">${escapeUsageHtml(formatUsageClock(log.time))}${sub(formatUsageRelTime(log.time))}</td>
         <td><span class="usage-app-badge usage-app-${escapeUsageHtml(log.app)}">${escapeUsageHtml(usageAppLabel(log.app))}</span></td>
         <td class="usage-td-model" title="${escapeUsageHtml(log.model)}">${escapeUsageHtml(log.model)}</td>
-        <td title="${zh ? "输入" : "In"} ${escapeUsageHtml(formatUsageTokens(log.inputTokens))} / ${zh ? "输出" : "Out"} ${escapeUsageHtml(formatUsageTokens(log.outputTokens))} / ${zh ? "缓存读" : "Cache read"} ${escapeUsageHtml(formatUsageTokens(log.cacheReadTokens))} / ${zh ? "缓存写" : "Cache write"} ${escapeUsageHtml(formatUsageTokens(log.cacheCreationTokens))}">${escapeUsageHtml(formatUsageTokens(log.totalTokens))}</td>
-        <td class="usage-td-cost" title="${escapeUsageHtml(costState.detail)}">${escapeUsageHtml(costState.value)}</td>
+        <td class="usage-td-project" title="${escapeUsageHtml(projectTitle)}"><span class="usage-td-clip">${escapeUsageHtml(log.project ? usageProjectName(log.project) : "—")}</span>${sub(log.sessionId && String(log.sessionId).slice(0, 8))}</td>
+        ${tokenCell(log.inputTokens)}
+        ${tokenCell(log.outputTokens)}
+        ${tokenCell(log.cacheReadTokens)}
+        ${tokenCell(log.cacheCreationTokens, cacheWriteTitle)}
+        ${tokenCell(log.totalTokens, undefined, sub(hitRate))}
+        <td class="usage-td-num usage-td-cost" title="${escapeUsageHtml(costTitle)}">${escapeUsageHtml(costState.value)}</td>
       </tr>`;
     })
     .join("");
@@ -9980,7 +10028,12 @@ function applyUsagePanelLanguage() {
   setText("usageThTime", zh ? "时间" : "Time");
   setText("usageThApp", zh ? "应用" : "App");
   setText("usageThRecentModel", zh ? "模型" : "Model");
-  setText("usageThTokens", "Tokens");
+  setText("usageThRecentProject", zh ? "项目" : "Project");
+  setText("usageThRecentInput", zh ? "输入" : "Input");
+  setText("usageThRecentOutput", zh ? "输出" : "Output");
+  setText("usageThRecentCacheRead", zh ? "缓存读取" : "Cache Read");
+  setText("usageThRecentCacheWrite", zh ? "缓存写入" : "Cache Write");
+  setText("usageThTokens", zh ? "合计" : "Total");
   setText("usageThRecentCost", zh ? "成本 (USD)" : "Cost (USD)");
   renderUsageRangeNote();
   const rangeLabels = {

@@ -776,6 +776,23 @@
 
 .usage-td-cost { font-weight: 650; }
 .usage-td-time { color: var(--console-muted, var(--text-muted)); }
+.usage-table .usage-td-num { text-align: right; }
+
+/* 最近记录的第二行（相对时间、会话 ID、命中率） */
+.usage-td-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--console-weak, var(--text-muted));
+}
+
+.usage-td-clip {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .usage-muted {
   color: var(--console-muted, var(--text-muted));
