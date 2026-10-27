@@ -154,8 +154,11 @@ async function pruneOldArtifacts(version) {
 }
 
 function updateDownloadPage(html, version, downloads) {
+  // 先把正文里的旧文件名（连同历史上叠加出的 ./releases/ 前缀）收成纯文件名，
+  // 再整体覆盖 href；直接把文件名替换成带前缀的路径会让前缀每发一版就多一层。
   html = html
-    .replace(/VarSwitch_\d+\.\d+\.\d+_x64-setup\.exe/g, downloads.windows)
+    .replace(/(?:\.\/releases\/)*VarSwitch_\d+\.\d+\.\d+_x64-setup\.exe/g, `VarSwitch_${version}_x64-setup.exe`)
+    .replace(/(href=")[^"]*VarSwitch_\d+\.\d+\.\d+_x64-setup\.exe(")/g, `$1${downloads.windows}$2`)
     .replace(/(当前版本 v)\d+\.\d+\.\d+/g, `$1${version}`)
     .replace(/(<strong>v)\d+\.\d+\.\d+(\s*<\/strong>\s*<span>当前版本<\/span>)/g, `$1${version}$2`)
     .replace(/(VarSwitch <span>v)\d+\.\d+\.\d+(<\/span>)/g, `$1${version}$2`)

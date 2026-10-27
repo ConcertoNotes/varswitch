@@ -187,7 +187,15 @@ test('download-site sync rewrites the three installer links and requires every u
       { arch: 'x64', dmgName: 'VarSwitch_3.2.8_x64.dmg', pageUrl: './releases/VarSwitch_3.2.8_x64.dmg' },
     ],
   });
-  assert.match(updated, /VarSwitch_3\.2\.8_x64-setup\.exe/);
+  assert.match(updated, /href="\.\/releases\/VarSwitch_3\.2\.8_x64-setup\.exe">VarSwitch_3\.2\.8_x64-setup\.exe</);
+  const rerun = updateDownloadPage(updated, '3.2.8', {
+    windows: './releases/VarSwitch_3.2.8_x64-setup.exe', macos: [],
+  });
+  assert.equal(rerun, updated);
+  assert.match(updateDownloadPage(
+    '<a href="./releases/./releases/VarSwitch_3.2.8_x64-setup.exe"></a><span>./releases/VarSwitch_3.2.8_x64-setup.exe</span>',
+    '3.2.9', { windows: './releases/VarSwitch_3.2.9_x64-setup.exe', macos: [] },
+  ), /^<a href="\.\/releases\/VarSwitch_3\.2\.9_x64-setup\.exe"><\/a><span>VarSwitch_3\.2\.9_x64-setup\.exe<\/span>$/);
   assert.match(updated, /data-mac-download="aarch64" href="\.\/releases\/VarSwitch_3\.2\.8_aarch64\.dmg"/);
   assert.match(updated, /data-mac-file="x64">VarSwitch_3\.2\.8_x64\.dmg/);
   assert.match(updated, /VarSwitch v3\.2\.8/);
