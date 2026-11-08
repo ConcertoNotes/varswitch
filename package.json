@@ -1,6 +1,6 @@
 {
   "name": "varswitch",
-  "version": "3.2.11",
+  "version": "3.2.12",
   "description": "VarSwitch - Unified API config manager for Claude Code",
   "private": true,
   "scripts": {

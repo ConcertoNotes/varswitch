@@ -141,10 +141,6 @@ pub(crate) fn codex_config_path() -> PathBuf {
     codex_config_dir().join("config.toml")
 }
 
-pub(crate) fn codex_deepseek_model_catalog_path() -> PathBuf {
-    codex_config_dir().join(CODEX_DEEPSEEK_MODEL_CATALOG_FILE)
-}
-
 pub(crate) fn is_deepseek_native_base_url(base_url: &str) -> bool {
     let lower = base_url.trim().to_ascii_lowercase();
     let without_scheme = lower
@@ -544,9 +540,14 @@ pub(crate) fn write_codex_config(profile: &CodexProfile) -> Result<(), String> {
 }
 
 pub(crate) fn write_codex_config_with_base_url(profile: &CodexProfile, base_url: &str) -> Result<(), String> {
-    let dir = codex_config_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("创建 ~/.codex 目录失败: {}", e))?;
-    let existing_config = fs::read_to_string(codex_config_path()).unwrap_or_default();
+    write_codex_config_at(profile, base_url, &codex_config_dir())
+}
+
+fn write_codex_config_at(profile: &CodexProfile, base_url: &str, dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| format!("创建 ~/.codex 目录失败: {}", e))?;
+    let config_path = dir.join("config.toml");
+    let auth_path = dir.join("auth.json");
+    let existing_config = fs::read_to_string(&config_path).unwrap_or_default();
 
     // 写入 config.toml
     let official_account_mode = is_codex_official_account_api_quota(&profile.auth_mode);
@@ -566,11 +567,13 @@ pub(crate) fn write_codex_config_with_base_url(profile: &CodexProfile, base_url:
     };
     if !official_account_mode && uses_deepseek_native_model_catalog(&provider, base_url) {
         write_file_atomic(
-            &codex_deepseek_model_catalog_path(),
+            &dir.join(CODEX_DEEPSEEK_MODEL_CATALOG_FILE),
             &deepseek_codex_model_catalog(),
         )
         .map_err(|e| format!("写入 Codex DeepSeek 模型目录失败: {}", e))?;
     }
+    #[cfg(target_os = "macos")]
+    let mut expected_auth = None;
     let toml_content = if official_account_mode {
         codex_config_toml_content_with_image(
             &provider,
@@ -583,7 +586,6 @@ pub(crate) fn write_codex_config_with_base_url(profile: &CodexProfile, base_url:
             &profile.image_base_url,
         )
     } else {
-        let auth_path = codex_auth_path();
         let mut auth = if auth_path.exists() {
             fs::read_to_string(&auth_path)
                 .ok()
@@ -604,6 +606,10 @@ pub(crate) fn write_codex_config_with_base_url(profile: &CodexProfile, base_url:
         let auth_str = serde_json::to_string_pretty(&auth).map_err(|e| e.to_string())?;
         write_private_file(&auth_path, &auth_str)
             .map_err(|e| format!("写入 codex auth.json 失败: {}", e))?;
+        #[cfg(target_os = "macos")]
+        {
+            expected_auth = Some(auth_str);
+        }
 
         codex_config_toml_content_with_image(
             &provider,
@@ -617,9 +623,29 @@ pub(crate) fn write_codex_config_with_base_url(profile: &CodexProfile, base_url:
         )
     };
     let final_toml = merge_codex_config_with_preserved_sections(&toml_content, &existing_config);
-    write_file_atomic(&codex_config_path(), &final_toml)
+    write_file_atomic(&config_path, &final_toml)
         .map_err(|e| format!("写入 codex config.toml 失败: {}", e))?;
 
+    // 两份文件均写完后再读回比对；校验失败必须沿切换失败路径返回，不能重启后台。
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(expected) = expected_auth {
+            verify_codex_config_file(&auth_path, &expected, "auth.json")?;
+        }
+        verify_codex_config_file(&config_path, &final_toml, "config.toml")?;
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn verify_codex_config_file(path: &Path, expected: &str, name: &str) -> Result<(), String> {
+    let actual = fs::read_to_string(path)
+        .map_err(|_| format!("校验 Codex {name} 失败：无法读取已写入文件"))?;
+    if actual != expected {
+        // 不附带内容或差异，避免 API Key / token 出现在错误和日志中。
+        return Err(format!("校验 Codex {name} 失败：写入内容不一致"));
+    }
     Ok(())
 }
 
@@ -1151,7 +1177,14 @@ pub(crate) fn delete_codex_profile(app: tauri::AppHandle, id: String) -> Result<
 
 #[tauri::command]
 pub(crate) fn switch_codex_profile(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let mut data = read_codex_profiles(&app);
+    complete_codex_profile_switch(
+        || switch_codex_profile_config(&app, &id),
+        restart_codex_daemon_after_profile_switch,
+    )
+}
+
+fn switch_codex_profile_config(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    let mut data = read_codex_profiles(app);
     let profile = data
         .profiles
         .iter()
@@ -1161,7 +1194,7 @@ pub(crate) fn switch_codex_profile(app: tauri::AppHandle, id: String) -> Result<
     ensure_secret_usable(&profile.api_key, &format!("Codex 配置「{}」", profile.name))?;
 
     // 切换前自动备份当前配置
-    auto_backup_configs(&app);
+    auto_backup_configs(app);
 
     write_codex_config(&profile)?;
     configure_codex_image_skill(&profile)?;
@@ -1169,9 +1202,65 @@ pub(crate) fn switch_codex_profile(app: tauri::AppHandle, id: String) -> Result<
     for p in data.profiles.iter_mut() {
         p.is_active = p.id == profile.id;
     }
-    write_codex_profiles(&app, &data)?;
+    write_codex_profiles(app, &data)?;
     Ok(())
 }
+
+/// 成功回调只接在整个切换流程末尾；低层文件写入、状态刷新和文件监听均不触发重启。
+fn complete_codex_profile_switch(
+    sync_config: impl FnOnce() -> Result<(), String>,
+    on_success: impl FnOnce(),
+) -> Result<(), String> {
+    sync_config()?;
+    on_success();
+    Ok(())
+}
+
+fn restart_codex_daemon_after_profile_switch() {
+    #[cfg(target_os = "macos")]
+    spawn_codex_daemon_restart(|| codex_daemon_restart_command().status());
+}
+
+#[cfg(target_os = "macos")]
+fn codex_daemon_restart_command() -> Command {
+    let mut command = Command::new("/bin/zsh");
+    // 异步执行由外层线程保证。不要另设后台进程组：从终端启动时，
+    // 交互式 zsh 会因终端作业控制（SIGTTIN）暂停，即使标准流已重定向。
+    command
+        .args(["-lic", "codex app-server daemon restart"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_codex_daemon_restart(
+    restart: impl FnOnce() -> std::io::Result<std::process::ExitStatus> + Send + 'static,
+) {
+    // 独立线程负责启动和等待子进程退出，丢弃 JoinHandle 后不会阻塞切换命令或 UI。
+    // 不重试，保证一次切换只执行一次 restart；只记录退出码/系统错误种类。
+    if let Err(error) = std::thread::Builder::new()
+        .name("codex-daemon-restart".into())
+        .spawn(move || match restart() {
+            Ok(status) if status.success() => {
+                log_info!("[codex-restart] 后台重启完成");
+            }
+            Ok(status) => {
+                log_warn!("[codex-restart] 后台重启失败，exit_code={:?}", status.code());
+            }
+            Err(error) => {
+                log_warn!("[codex-restart] 后台重启进程失败，error_kind={:?}", error.kind());
+            }
+        })
+    {
+        log_warn!("[codex-restart] 无法创建后台重启线程，error_kind={:?}", error.kind());
+    }
+}
+
+#[cfg(test)]
+#[path = "codex_switch_tests.rs"]
+mod switch_tests;
 
 pub(crate) fn build_imported_codex_profile(
     name: String,
